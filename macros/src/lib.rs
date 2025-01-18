@@ -1,125 +1,151 @@
 #![deny(warnings)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg, doc_cfg_hide))]
 
-use proc_macro::{TokenStream, TokenTree};
-use proc_macro2::{Ident, Span, TokenStream as TokenStream2, TokenTree as TokenTree2};
-use quote::quote;
+use proc_macro::TokenStream;
+use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
+use quote::{quote, ToTokens};
 use syn::{
-    parse::{Parse, ParseStream, Result},
-    parse_macro_input, Attribute, Error, ItemFn, Token,
+    parenthesized,
+    parse::{discouraged::Speculative, Parse, ParseStream, Result},
+    parse_macro_input,
+    punctuated::Punctuated,
+    Block, Error, FnArg, Generics, ImplItemFn, ItemFn, Signature, Token, TraitItemFn,
 };
 
-use crate::desugar_if_async::DesugarIfAsync;
+use crate::async_generic_fn::{
+    state::{Async, Sync},
+    AsyncGenericFn,
+};
 
+mod async_generic_fn;
 mod desugar_if_async;
-
-fn convert_sync_async(
-    input: &mut Item,
-    is_async: bool,
-    alt_sig: Option<TokenStream>,
-) -> TokenStream2 {
-    let item = &mut input.0;
-
-    if is_async {
-        item.sig.asyncness = Some(Token![async](Span::call_site()));
-        item.sig.ident = Ident::new(&format!("{}_async", item.sig.ident), Span::call_site());
-    }
-
-    let tokens = quote!(#item);
-
-    let tokens = if let Some(alt_sig) = alt_sig {
-        let mut found_fn = false;
-        let mut found_args = false;
-
-        let old_tokens = tokens.into_iter().map(|token| match &token {
-            TokenTree2::Ident(i) => {
-                found_fn = found_fn || &i.to_string() == "fn";
-                token
-            }
-            TokenTree2::Group(g) => {
-                if found_fn && !found_args && g.delimiter() == proc_macro2::Delimiter::Parenthesis {
-                    found_args = true;
-                    return TokenTree2::Group(proc_macro2::Group::new(
-                        proc_macro2::Delimiter::Parenthesis,
-                        alt_sig.clone().into(),
-                    ));
-                }
-                token
-            }
-            _ => token,
-        });
-
-        TokenStream2::from_iter(old_tokens)
-    } else {
-        tokens
-    };
-
-    DesugarIfAsync { is_async }.desugar_if_async(tokens)
-}
+mod util;
 
 #[proc_macro_attribute]
 pub fn async_generic(args: TokenStream, input: TokenStream) -> TokenStream {
-    let mut async_signature: Option<TokenStream> = None;
-
-    if !args.to_string().is_empty() {
-        let mut atokens = args.into_iter();
-        loop {
-            if let Some(TokenTree::Ident(i)) = atokens.next() {
-                if i.to_string() != *"async_signature" {
-                    break;
-                }
-            } else {
-                break;
-            }
-
-            if let Some(TokenTree::Group(g)) = atokens.next() {
-                if atokens.next().is_none() && g.delimiter() == proc_macro::Delimiter::Parenthesis {
-                    async_signature = Some(g.stream());
-                }
-            }
-        }
-
-        if async_signature.is_none() {
-            return syn::Error::new(
-                Span::call_site(),
-                "async_generic can only take a async_signature argument",
-            )
-            .to_compile_error()
-            .into();
-        }
+    let async_signature: Option<AsyncSignature> = if args.is_empty() {
+        None
+    } else {
+        Some(parse_macro_input!(args as AsyncSignature))
     };
 
-    let input_clone = input.clone();
-    let mut item = parse_macro_input!(input_clone as Item);
-    let sync_tokens = convert_sync_async(&mut item, false, None);
+    let target_fn = parse_macro_input!(input as TargetFn);
 
-    let mut item = parse_macro_input!(input as Item);
-    let async_tokens = convert_sync_async(&mut item, true, async_signature);
+    let sync_fn = AsyncGenericFn::<Sync>::new(&target_fn);
+    let async_fn = AsyncGenericFn::<Async>::new(&target_fn, async_signature);
 
-    let mut tokens = sync_tokens;
-    tokens.extend(async_tokens);
-    tokens.into()
+    (quote! {
+        #sync_fn
+        #async_fn
+    })
+    .into()
 }
 
-struct Item(ItemFn);
+struct AsyncSignature {
+    inputs: Punctuated<FnArg, Token![,]>,
+    generics: Generics,
+}
 
-impl Parse for Item {
+impl Parse for AsyncSignature {
     fn parse(input: ParseStream) -> Result<Self> {
-        let attrs = input.call(Attribute::parse_outer)?;
-        if let Ok(mut item) = input.parse::<ItemFn>() {
-            item.attrs = attrs;
-            if item.sig.asyncness.is_some() {
-                return Err(Error::new(
-                    Span::call_site(),
-                    "an async_generic function should not be declared as async",
-                ));
-            }
-            Ok(Item(item))
+        let ident: Ident = input.parse()?;
+        if ident.to_string() != "async_signature" {
+            return Err(Error::new(
+                ident.span(),
+                "async_generic can only take a async_signature argument",
+            ));
+        }
+
+        let mut generics: Generics = input.parse()?;
+
+        let content;
+        parenthesized!(content in input);
+        let inputs = Punctuated::parse_terminated(&content)?;
+
+        generics.where_clause = if input.is_empty() {
+            None
         } else {
+            input.parse()?
+        };
+
+        Ok(AsyncSignature { inputs, generics })
+    }
+}
+
+impl ToTokens for AsyncSignature {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        let Self {
+            inputs, generics, ..
+        } = self;
+        let where_clause = self.generics.where_clause.as_ref();
+
+        tokens.extend(quote! {
+            #generics(#inputs)
+            #where_clause
+        });
+    }
+}
+
+enum TargetFn {
+    FreeStanding(ItemFn),
+    Trait(TraitItemFn),
+    Impl(ImplItemFn),
+}
+
+impl TargetFn {
+    fn sig(&self) -> &Signature {
+        match self {
+            Self::FreeStanding(f) => &f.sig,
+            Self::Trait(f) => &f.sig,
+            Self::Impl(f) => &f.sig,
+        }
+    }
+
+    fn block(&self) -> Option<&Block> {
+        match self {
+            Self::FreeStanding(f) => Some(&f.block),
+            Self::Trait(f) => f.default.as_ref(),
+            Self::Impl(f) => Some(&f.block),
+        }
+    }
+}
+
+impl Parse for TargetFn {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let target_fn = {
+            let fork = input.fork();
+            fork.parse()
+                .map(TargetFn::FreeStanding)
+                .inspect(|_| input.advance_to(&fork))
+                .or_else(|err1| {
+                    let fork = input.fork();
+                    fork.parse()
+                        .map(TargetFn::Trait)
+                        .inspect(|_| input.advance_to(&fork))
+                        .or_else(|err2| {
+                            let fork = input.fork();
+                            fork.parse()
+                                .map(TargetFn::Impl)
+                                .inspect(|_| input.advance_to(&fork))
+                                .or_else(|err3| {
+                                    let mut err = Error::new(
+                                        Span::call_site(),
+                                        "async_generic can only be used with functions",
+                                    );
+                                    err.extend([err1, err2, err3]);
+                                    Err(err)
+                                })
+                        })
+                })?
+        };
+
+        if let Some(r#async) = &target_fn.sig().asyncness {
             Err(Error::new(
-                Span::call_site(),
-                "async_generic can only be used with functions",
+                r#async.span,
+                "an async_generic function should not be declared as async",
             ))
+        } else {
+            Ok(target_fn)
         }
     }
 }
