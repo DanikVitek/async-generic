@@ -1,6 +1,3 @@
-use proc_macro2::TokenStream as TokenStream2;
-use quote::ToTokens;
-
 pub trait LetExt: Sized {
     #[inline]
     fn r#let<F, T>(self, f: F) -> T
@@ -26,28 +23,5 @@ impl<T, E> InspectExt<T> for Result<T, E> {
         }
 
         self
-    }
-}
-
-pub enum Either<A, B> {
-    A(A),
-    B(B),
-}
-
-impl<A, B> Either<A, B> {
-    pub fn unwrap_a(self) -> A {
-        match self {
-            Self::A(a) => a,
-            Self::B(_) => panic!("called `Either::unwrap_a` on a `B` value"),
-        }
-    }
-}
-
-impl<A: ToTokens, B: ToTokens> ToTokens for Either<A, B> {
-    fn to_tokens(&self, tokens: &mut TokenStream2) {
-        match self {
-            Self::A(a) => a.to_tokens(tokens),
-            Self::B(b) => b.to_tokens(tokens),
-        }
     }
 }

@@ -12,10 +12,7 @@ use syn::{
     Token, TraitItemFn,
 };
 
-use crate::{
-    async_generic_target::{r#fn::kind::Kind, state},
-    util::Either,
-};
+use crate::async_generic_target::{r#fn::kind::Kind, state};
 
 pub fn transform(
     target_fn: TargetItemFn,
@@ -276,18 +273,15 @@ pub mod kind {
 }
 
 trait CanTransformBlock {
-    fn transform_block(initial: Either<Block, Token![;]>) -> Either<Block, Token![;]>;
+    fn transform_block(initial: Option<Block>) -> Option<Block>;
 }
 
 impl<A: CanCompareToPredicate> CanTransformBlock for A {
-    fn transform_block(initial: Either<Block, Token![;]>) -> Either<Block, Token![;]> {
-        match initial {
-            Either::A(mut block) => {
-                IfAsyncRewriter::<A>(PhantomData).visit_block_mut(&mut block);
-                Either::A(block)
-            }
-            Either::B(tok) => Either::B(tok),
-        }
+    fn transform_block(initial: Option<Block>) -> Option<Block> {
+        initial.map(|mut block| {
+            IfAsyncRewriter::<A>(PhantomData).visit_block_mut(&mut block);
+            block
+        })
     }
 }
 
@@ -394,34 +388,22 @@ where
                     output: self.kind.transform_output(f.sig.output),
                     ..f.sig
                 },
-                block: Box::new(A::transform_block(Either::A(*f.block)).unwrap_a()),
+                block: Box::new(A::transform_block(Some(*f.block)).unwrap()),
                 ..f
             }),
-            TargetItemFn::Trait(f) => {
-                let block = match (f.default, f.semi_token) {
-                    (Some(block), None) => A::transform_block(Either::A(block)),
-                    (None, Some(semi_token)) => A::transform_block(Either::B(semi_token)),
-                    _ => unreachable!(),
-                };
-                let (default, semi_token) = match block {
-                    Either::A(block) => (Some(block), None),
-                    Either::B(semi_token) => (None, Some(semi_token)),
-                };
-                TargetItemFn::Trait(TraitItemFn {
-                    sig: Signature {
-                        constness: A::transform_constness(f.sig.constness),
-                        asyncness: A::asyncness(),
-                        ident: A::transform_ident(f.sig.ident),
-                        generics: self.kind.transform_generics(f.sig.generics),
-                        inputs: self.kind.transform_inputs(f.sig.inputs),
-                        output: self.kind.transform_output(f.sig.output),
-                        ..f.sig
-                    },
-                    default,
-                    semi_token,
-                    ..f
-                })
-            }
+            TargetItemFn::Trait(f) => TargetItemFn::Trait(TraitItemFn {
+                sig: Signature {
+                    constness: A::transform_constness(f.sig.constness),
+                    asyncness: A::asyncness(),
+                    ident: A::transform_ident(f.sig.ident),
+                    generics: self.kind.transform_generics(f.sig.generics),
+                    inputs: self.kind.transform_inputs(f.sig.inputs),
+                    output: self.kind.transform_output(f.sig.output),
+                    ..f.sig
+                },
+                default: A::transform_block(f.default),
+                ..f
+            }),
             TargetItemFn::Impl(f) => TargetItemFn::Impl(ImplItemFn {
                 sig: Signature {
                     constness: A::transform_constness(f.sig.constness),
@@ -432,7 +414,7 @@ where
                     output: self.kind.transform_output(f.sig.output),
                     ..f.sig
                 },
-                block: A::transform_block(Either::A(f.block)).unwrap_a(),
+                block: A::transform_block(Some(f.block)).unwrap(),
                 ..f
             }),
         };
