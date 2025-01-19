@@ -1,17 +1,17 @@
 use async_generic::async_generic;
 use async_trait::async_trait;
 
-#[async_trait]
+#[async_generic(async_trait)]
 trait NoDefaultImpl {
-    #[async_generic(async_signature(&self) where Self: Send + Sync)]
+    #[async_generic(async_signature(&self) -> String where Self: Send + Sync)]
     fn do_stuff(&self) -> String;
 }
 
 struct StructA {}
 
-#[async_trait]
+#[async_generic(async_trait)]
 impl NoDefaultImpl for StructA {
-    #[async_generic(async_signature(&self) where Self: Send + Sync)]
+    #[async_generic(async_signature(&self) -> String where Self: Send + Sync)]
     fn do_stuff(&self) -> String {
         if _async {
             self.my_async_stuff().await
@@ -27,7 +27,7 @@ impl StructA {
     }
 }
 
-#[async_trait]
+#[async_generic(async_trait)]
 trait DefaultImpl {
     #[async_generic(async_signature(&self) where Self: Send + Sync)]
     fn do_stuff(&self) -> String {

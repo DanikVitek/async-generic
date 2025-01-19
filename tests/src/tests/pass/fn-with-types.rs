@@ -1,6 +1,6 @@
 use async_generic::async_generic;
 
-#[async_generic(async_signature(thing: &AsyncThing))]
+#[async_generic(async_signature(thing: &AsyncThing) -> String)]
 fn do_stuff(thing: &SyncThing) -> String {
     if _async {
         thing.do_stuff().await

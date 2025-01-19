@@ -34,6 +34,15 @@ pub enum Either<A, B> {
     B(B),
 }
 
+impl<A, B> Either<A, B> {
+    pub fn unwrap_a(self) -> A {
+        match self {
+            Self::A(a) => a,
+            Self::B(_) => panic!("called `Either::unwrap_a` on a `B` value"),
+        }
+    }
+}
+
 impl<A: ToTokens, B: ToTokens> ToTokens for Either<A, B> {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
         match self {

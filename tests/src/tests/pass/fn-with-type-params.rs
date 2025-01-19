@@ -3,7 +3,7 @@ use std::io::{Read, Result};
 use async_generic::async_generic;
 use async_trait::async_trait;
 
-#[async_generic(async_signature<R: AsyncRead>(reader: &mut R))]
+#[async_generic(async_signature<R: AsyncRead>(reader: &mut R) -> Result<u8>)]
 fn do_stuff<R: Read>(reader: &mut R) -> Result<u8> {
     let mut buf = [0u8; 1];
     if _async {
