@@ -5,3 +5,9 @@ error: async_generic can only be used with functions
    | ^^^^^^^^^^^^^^^^
    |
    = note: this error originates in the attribute macro `async_generic` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: expected `fn`
+  --> src/tests/fail/no-impl.rs:11:1
+   |
+11 | impl Trait for Struct {}
+   | ^^^^

@@ -9,7 +9,7 @@ use syn::{
     parse::{discouraged::Speculative, Parse, ParseStream, Result},
     parse_macro_input,
     punctuated::Punctuated,
-    Block, Error, FnArg, Generics, ImplItemFn, ItemFn, Signature, Token, TraitItemFn,
+    Block, Error, FnArg, Generics, ImplItemFn, ItemFn, Signature, Token, TraitItemFn, Visibility,
 };
 
 use crate::async_generic_fn::{
@@ -18,7 +18,7 @@ use crate::async_generic_fn::{
 };
 
 mod async_generic_fn;
-mod desugar_if_async;
+// mod desugar_if_async;
 mod util;
 
 #[proc_macro_attribute]
@@ -93,6 +93,14 @@ enum TargetFn {
 }
 
 impl TargetFn {
+    fn visibility(&self) -> Option<&Visibility> {
+        match self {
+            Self::FreeStanding(f) => Some(&f.vis),
+            Self::Trait(_) => None,
+            Self::Impl(f) => Some(&f.vis),
+        }
+    }
+
     fn sig(&self) -> &Signature {
         match self {
             Self::FreeStanding(f) => &f.sig,
@@ -113,30 +121,32 @@ impl TargetFn {
 impl Parse for TargetFn {
     fn parse(input: ParseStream) -> Result<Self> {
         let target_fn = {
+            use crate::util::InspectExt;
+
             let fork = input.fork();
-            fork.parse()
-                .map(TargetFn::FreeStanding)
-                .inspect(|_| input.advance_to(&fork))
-                .or_else(|err1| {
+            InspectExt::inspect(fork.parse().map(TargetFn::FreeStanding), |_| {
+                input.advance_to(&fork)
+            })
+            .or_else(|err1| {
+                let fork = input.fork();
+                InspectExt::inspect(fork.parse().map(TargetFn::Trait), |_| {
+                    input.advance_to(&fork)
+                })
+                .or_else(|err2| {
                     let fork = input.fork();
-                    fork.parse()
-                        .map(TargetFn::Trait)
-                        .inspect(|_| input.advance_to(&fork))
-                        .or_else(|err2| {
-                            let fork = input.fork();
-                            fork.parse()
-                                .map(TargetFn::Impl)
-                                .inspect(|_| input.advance_to(&fork))
-                                .or_else(|err3| {
-                                    let mut err = Error::new(
-                                        Span::call_site(),
-                                        "async_generic can only be used with functions",
-                                    );
-                                    err.extend([err1, err2, err3]);
-                                    Err(err)
-                                })
-                        })
-                })?
+                    InspectExt::inspect(fork.parse().map(TargetFn::Impl), |_| {
+                        input.advance_to(&fork)
+                    })
+                    .or_else(|err3| {
+                        let mut err = Error::new(
+                            Span::call_site(),
+                            "async_generic can only be used with functions",
+                        );
+                        err.extend([err1, err2, err3]);
+                        Err(err)
+                    })
+                })
+            })?
         };
 
         if let Some(r#async) = &target_fn.sig().asyncness {

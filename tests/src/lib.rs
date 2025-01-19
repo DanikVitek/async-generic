@@ -1,10 +1,12 @@
 #[test]
 fn tests() {
     let t = trybuild::TestCases::new();
-    t.pass("src/tests/pass/fun-with-types.rs");
+    t.pass("src/tests/pass/fn-with-type-params.rs");
+    t.pass("src/tests/pass/fn-with-types.rs");
     t.pass("src/tests/pass/generic-fn.rs");
     t.pass("src/tests/pass/generic-fn-with-visibility.rs");
     t.pass("src/tests/pass/struct-method-generic.rs");
+    t.pass("src/tests/pass/trait-fn.rs");
 
     t.compile_fail("src/tests/fail/misuse-of-underscore-async.rs");
     t.compile_fail("src/tests/fail/no-async-fn.rs");

@@ -1,10 +1,14 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, marker::PhantomData};
 
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
-use syn::{punctuated::Punctuated, visit_mut, Block, FnArg, Generics, ReturnType, Stmt, Token};
-use syn::visit::Visit;
-use syn::visit_mut::VisitMut;
+use syn::{
+    parse_quote,
+    punctuated::Punctuated,
+    visit_mut::{self, VisitMut},
+    Block, Expr, ExprBlock, FnArg, Generics, ReturnType, Token, Visibility,
+};
+
 use crate::{
     util::{Either, LetExt},
     AsyncSignature, TargetFn,
@@ -16,7 +20,7 @@ pub struct AsyncGenericFn<'f, S> {
 }
 
 impl<'f> AsyncGenericFn<'f, state::Sync> {
-    pub const fn new(target: &'f TargetFn) -> Self {
+    pub(crate) const fn new(target: &'f TargetFn) -> Self {
         Self {
             target,
             state: state::Sync,
@@ -25,7 +29,7 @@ impl<'f> AsyncGenericFn<'f, state::Sync> {
 }
 
 impl<'f> AsyncGenericFn<'f, state::Async> {
-    pub const fn new(target: &'f TargetFn, sig: Option<AsyncSignature>) -> Self {
+    pub(crate) const fn new(target: &'f TargetFn, sig: Option<AsyncSignature>) -> Self {
         Self {
             target,
             state: state::Async(sig),
@@ -42,7 +46,8 @@ pub mod state {
 }
 
 trait HasFunctionParts:
-    HasConstness
+    HasVisibility
+    + HasConstness
     + HasUnsafety
     + HasAsyncness
     + HasIdent
@@ -54,7 +59,8 @@ trait HasFunctionParts:
 }
 
 impl<T> HasFunctionParts for T where
-    T: HasConstness
+    T: HasVisibility
+        + HasConstness
         + HasUnsafety
         + HasAsyncness
         + HasIdent
@@ -63,6 +69,16 @@ impl<T> HasFunctionParts for T where
         + HasOutput
         + HasBlock
 {
+}
+
+trait HasVisibility {
+    fn visibility(&self) -> Option<&Visibility>;
+}
+
+impl<S> HasVisibility for AsyncGenericFn<'_, S> {
+    fn visibility(&self) -> Option<&Visibility> {
+        self.target.visibility()
+    }
 }
 
 trait HasConstness {
@@ -178,40 +194,111 @@ trait HasBlock {
     fn block(&self) -> Either<Block, Token![;]>;
 }
 
-impl<'f, S> HasBlock for AsyncGenericFn<'f, S>
+impl<S> HasBlock for AsyncGenericFn<'_, S>
 where
-    AsyncGenericFn<'f, S>: CanRewriteBlock,
+    IfAsyncRewriter<S>: CanRewriteBlock,
 {
     fn block(&self) -> Either<Block, Token![;]> {
         match self.target.block() {
-            Some(block) => Either::A(Self::rewrite_block(block)),
+            Some(block) => {
+                let mut block = block.clone();
+                IfAsyncRewriter::<S>(PhantomData).visit_block_mut(&mut block);
+                Either::A(block)
+            }
             None => Either::B(Token![;](Span::call_site())),
         }
     }
 }
 
 trait CanRewriteBlock {
-    fn rewrite_block(block: &Block) -> Block;
+    fn rewrite_block(
+        node: &mut Expr,
+        predicate: AsyncPredicate,
+        then_branch: Block,
+        else_branch: Option<Expr>,
+    );
 }
 
-impl CanRewriteBlock for AsyncGenericFn<'_, state::Sync> {
-    fn rewrite_block(_block: &Block) -> Block {
-        todo!()
+enum AsyncPredicate {
+    Sync,
+    Async,
+}
+
+struct IfAsyncRewriter<S>(PhantomData<S>);
+
+trait CanCompareToPredicate {
+    fn cmp(predicate: AsyncPredicate) -> bool;
+}
+
+impl CanCompareToPredicate for state::Sync {
+    fn cmp(predicate: AsyncPredicate) -> bool {
+        matches!(predicate, AsyncPredicate::Sync)
     }
 }
 
-impl CanRewriteBlock for AsyncGenericFn<'_, state::Async> {
-    fn rewrite_block(_block: &Block) -> Block {
-        todo!()
+impl CanCompareToPredicate for state::Async {
+    fn cmp(predicate: AsyncPredicate) -> bool {
+        matches!(predicate, AsyncPredicate::Async)
     }
 }
 
-struct StmtVisitor;
+impl<S> CanRewriteBlock for IfAsyncRewriter<S>
+where
+    S: CanCompareToPredicate,
+{
+    fn rewrite_block(
+        node: &mut Expr,
+        predicate: AsyncPredicate,
+        then_branch: Block,
+        else_branch: Option<Expr>,
+    ) {
+        *node = if S::cmp(predicate) {
+            Expr::Block(ExprBlock {
+                attrs: vec![],
+                label: None,
+                block: then_branch,
+            })
+        } else if let Some(else_expr) = else_branch {
+            else_expr
+        } else {
+            parse_quote! {{}}
+        }
+    }
+}
 
-impl VisitMut for StmtVisitor {
-    fn visit_stmt_mut(&mut self, i: &mut Stmt) {
-        // visit_mut::visit_stmt_mut()
-        todo!()
+impl<S> VisitMut for IfAsyncRewriter<S>
+where
+    IfAsyncRewriter<S>: CanRewriteBlock,
+{
+    fn visit_expr_mut(&mut self, node: &mut Expr) {
+        visit_mut::visit_expr_mut(self, node);
+
+        let Expr::If(expr_if) = node else {
+            return;
+        };
+        let Expr::Path(cond) = expr_if.cond.as_ref() else {
+            return;
+        };
+        if !cond.attrs.is_empty()
+            || !cond.qself.is_none()
+            || cond.path.leading_colon.is_some()
+            || cond.path.segments.len() != 1
+        {
+            return;
+        }
+        let segment = cond.path.segments.first().unwrap();
+        if !segment.arguments.is_none() {
+            return;
+        }
+        let predicate = match segment.ident.to_string().as_str() {
+            "_sync" => AsyncPredicate::Sync,
+            "_async" => AsyncPredicate::Async,
+            _ => return,
+        };
+        let then_branch = expr_if.then_branch.clone();
+        let else_branch = expr_if.else_branch.as_ref().map(|eb| *eb.1.clone());
+
+        Self::rewrite_block(node, predicate, then_branch, else_branch);
     }
 }
 
@@ -220,6 +307,7 @@ where
     AsyncGenericFn<'f, S>: HasFunctionParts,
 {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
+        let visibility = self.visibility();
         let constness = self.constness();
         let asyncness = self.asyncness();
         let unsafety = self.unsafety();
@@ -230,7 +318,7 @@ where
         let output = self.output();
         let block = self.block();
         tokens.extend(quote! {
-            #constness #asyncness #unsafety fn #ident #generics(#inputs) #output
+            #visibility #constness #asyncness #unsafety fn #ident #generics(#inputs) #output
             #where_clause
             #block
         });
