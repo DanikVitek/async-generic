@@ -15,6 +15,8 @@ use syn::{
 use self::kind::Kind;
 use super::state;
 
+pub mod kind;
+
 #[inline]
 pub fn transform(
     target_fn: impl Into<TargetItemFn>,
@@ -125,22 +127,22 @@ impl Parse for TargetItemFn {
             InspectExt::inspect(fork.parse().map(TargetItemFn::FreeStanding), |_| {
                 input.advance_to(&fork)
             })
-            .or_else(|mut err1| {
-                let fork = input.fork();
-                InspectExt::inspect(fork.parse().map(TargetItemFn::Trait), |_| {
-                    input.advance_to(&fork)
-                })
-                .or_else(|err2| {
+                .or_else(|mut err1| {
                     let fork = input.fork();
-                    InspectExt::inspect(fork.parse().map(TargetItemFn::Impl), |_| {
+                    InspectExt::inspect(fork.parse().map(TargetItemFn::Trait), |_| {
                         input.advance_to(&fork)
                     })
-                    .map_err(|err3| {
-                        err1.extend([err2, err3]);
-                        err1
-                    })
-                })
-            })?
+                        .or_else(|err2| {
+                            let fork = input.fork();
+                            InspectExt::inspect(fork.parse().map(TargetItemFn::Impl), |_| {
+                                input.advance_to(&fork)
+                            })
+                                .map_err(|err3| {
+                                    err1.extend([err2, err3]);
+                                    err1
+                                })
+                        })
+                })?
         };
 
         if let Some(r#async) = &target_fn.sig().asyncness {
@@ -238,99 +240,6 @@ impl AsyncGenericFn<kind::Async, state::Initial> {
             target,
             kind: kind::Async(sig),
             _state: PhantomData,
-        }
-    }
-}
-
-pub mod kind {
-    use proc_macro2::{Ident, Span};
-    use syn::{punctuated::Punctuated, FnArg, Generics, ReturnType, Token};
-
-    use crate::AsyncSignature;
-
-    pub struct Sync;
-
-    pub struct Async(pub(super) Option<AsyncSignature>);
-
-    pub trait Kind {
-        fn asyncness() -> Option<Token![async]>;
-
-        fn transform_ident(ident: Ident) -> Ident {
-            ident
-        }
-
-        fn transform_constness(constness: Option<Token![const]>) -> Option<Token![const]> {
-            constness
-        }
-
-        fn transform_generics(&mut self, generics: Generics) -> Generics {
-            generics
-        }
-
-        fn transform_inputs(
-            &mut self,
-            inputs: Punctuated<FnArg, Token![,]>,
-        ) -> Punctuated<FnArg, Token![,]> {
-            inputs
-        }
-
-        fn transform_output(&mut self, output: ReturnType) -> ReturnType {
-            output
-        }
-    }
-
-    impl Kind for Sync {
-        fn asyncness() -> Option<Token![async]> {
-            None
-        }
-    }
-
-    impl Kind for Async {
-        fn asyncness() -> Option<Token![async]> {
-            Some(Token![async](Span::call_site()))
-        }
-
-        fn transform_ident(ident: Ident) -> Ident {
-            Ident::new(&format!("{ident}_async"), ident.span())
-        }
-
-        fn transform_generics(&mut self, generics: Generics) -> Generics {
-            if let Some(alt_generics) = self
-                .0
-                .as_mut()
-                .map(|AsyncSignature { generics, .. }| std::mem::take(generics))
-            {
-                alt_generics
-            } else {
-                generics
-            }
-        }
-
-        fn transform_inputs(
-            &mut self,
-            inputs: Punctuated<FnArg, Token!(,)>,
-        ) -> Punctuated<FnArg, Token!(,)> {
-            if let Some(alt_inputs) = self
-                .0
-                .as_mut()
-                .map(|AsyncSignature { inputs, .. }| std::mem::take(inputs))
-            {
-                alt_inputs
-            } else {
-                inputs
-            }
-        }
-
-        fn transform_output(&mut self, output: ReturnType) -> ReturnType {
-            if let Some(alt_output) = self.0.as_mut().map(|AsyncSignature { output, .. }| {
-                let mut default = ReturnType::Default;
-                std::mem::swap(output, &mut default);
-                default
-            }) {
-                alt_output
-            } else {
-                output
-            }
         }
     }
 }
