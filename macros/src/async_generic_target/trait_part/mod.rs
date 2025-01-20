@@ -2,21 +2,75 @@ use core::marker::PhantomData;
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::ToTokens;
-use syn::{parse2, AttrStyle, Attribute, Meta, MetaList};
+use syn::{
+    parse::{discouraged::Speculative, Parse, ParseStream},
+    parse2,
+    punctuated::Punctuated,
+    AttrStyle, Attribute, ItemImpl, ItemTrait, Meta, MetaList, Token,
+};
 
 use super::{
     r#fn::{AsyncGenericFn, TargetItemFn},
-    state, LaterAttributes,
+    state,
 };
 
 pub mod r#impl;
 pub mod r#trait;
 
-pub fn expand<T: TraitPart>(target: T, later_attributes: LaterAttributes) -> TokenStream2 {
-    AsyncGenericTraitPart::<T, _>::new(target, later_attributes)
-        .rewrite()
-        .map(|r#trait| r#trait.into_token_stream())
-        .unwrap_or_else(|err| err.into_compile_error())
+pub fn expand(target: TargetTraitPart, later_attributes: LaterAttributes) -> TokenStream2 {
+    fn expand<T: TraitPart>(target: T, later_attributes: LaterAttributes) -> TokenStream2 {
+        AsyncGenericTraitPart::new(target, later_attributes)
+            .rewrite()
+            .map(|r#trait| r#trait.into_token_stream())
+            .unwrap_or_else(|err| err.into_compile_error())
+    }
+    match target {
+        TargetTraitPart::Trait(item) => expand(item, later_attributes),
+        TargetTraitPart::Impl(item) => expand(item, later_attributes),
+    }
+}
+
+pub enum TargetTraitPart {
+    Trait(ItemTrait),
+    Impl(ItemImpl),
+}
+
+impl Parse for TargetTraitPart {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let target_item = {
+            use crate::util::InspectExt;
+
+            let fork = input.fork();
+            InspectExt::inspect(fork.parse().map(TargetTraitPart::Trait), |_| {
+                input.advance_to(&fork)
+            })
+            .or_else(|mut err1| {
+                let fork = input.fork();
+                InspectExt::inspect(fork.parse().map(TargetTraitPart::Impl), |_| {
+                    input.advance_to(&fork)
+                })
+                .map_err(|err2| {
+                    err1.extend(Some(err2));
+                    err1
+                })
+            })?
+        };
+
+        Ok(target_item)
+    }
+}
+
+#[derive(Default)]
+pub struct LaterAttributes {
+    attrs: Punctuated<Meta, Token![,]>,
+}
+
+impl Parse for LaterAttributes {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self {
+            attrs: Punctuated::parse_terminated(input)?,
+        })
+    }
 }
 
 pub trait TraitPart: ToTokens {

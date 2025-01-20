@@ -35,7 +35,7 @@ pub fn transform(
             AsyncGenericFn::<kind::Async, _>::new(target_fn, async_signature).rewrite(),
         )
     }
-    
+
     transform(target_fn.into(), async_signature)
 }
 
@@ -135,9 +135,9 @@ impl Parse for TargetItemFn {
                     InspectExt::inspect(fork.parse().map(TargetItemFn::Impl), |_| {
                         input.advance_to(&fork)
                     })
-                    .or_else(|err3| {
+                    .map_err(|err3| {
                         err1.extend([err2, err3]);
-                        Err(err1)
+                        err1
                     })
                 })
             })?

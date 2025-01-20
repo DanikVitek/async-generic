@@ -1,11 +1,10 @@
 use proc_macro2::Span;
 use syn::{
     parse::{discouraged::Speculative, Parse, ParseStream},
-    punctuated::Punctuated,
-    Error, ItemImpl, ItemTrait, Meta, Result, Token,
+    Error, Result,
 };
 
-use self::r#fn::TargetItemFn;
+use self::{r#fn::TargetItemFn, trait_part::TargetTraitPart};
 
 pub mod r#fn;
 pub mod trait_part;
@@ -17,8 +16,7 @@ pub mod state {
 
 pub enum TargetItem {
     Fn(TargetItemFn),
-    Trait(ItemTrait),
-    Impl(ItemImpl),
+    TraitPart(TargetTraitPart),
 }
 
 impl Parse for TargetItem {
@@ -32,39 +30,20 @@ impl Parse for TargetItem {
             })
             .or_else(|err1| {
                 let fork = input.fork();
-                InspectExt::inspect(fork.parse().map(TargetItem::Trait), |_| {
+                InspectExt::inspect(fork.parse().map(TargetItem::TraitPart), |_| {
                     input.advance_to(&fork)
                 })
-                .or_else(|err2| {
-                    let fork = input.fork();
-                    InspectExt::inspect(fork.parse().map(TargetItem::Impl), |_| {
-                        input.advance_to(&fork)
-                    })
-                    .map_err(|err3| {
-                        let mut err = Error::new(
-                            Span::call_site(),
-                            "async_generic can only be used with functions, traits or impls",
-                        );
-                        err.extend([err1, err2, err3]);
-                        err
-                    })
+                .map_err(|err2| {
+                    let mut err = Error::new(
+                        Span::call_site(),
+                        "async_generic can only be used with functions, traits or impls",
+                    );
+                    err.extend([err1, err2]);
+                    err
                 })
             })?
         };
 
         Ok(target_item)
-    }
-}
-
-#[derive(Default)]
-pub struct LaterAttributes {
-    attrs: Punctuated<Meta, Token![,]>,
-}
-
-impl Parse for LaterAttributes {
-    fn parse(input: ParseStream) -> Result<Self> {
-        Ok(Self {
-            attrs: Punctuated::parse_terminated(input)?,
-        })
     }
 }

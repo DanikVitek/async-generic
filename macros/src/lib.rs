@@ -4,7 +4,7 @@
 use proc_macro::TokenStream;
 use syn::parse_macro_input;
 
-use crate::async_generic_target::{r#fn::AsyncSignature, LaterAttributes, TargetItem};
+use self::async_generic_target::{r#fn::AsyncSignature, trait_part::LaterAttributes, TargetItem};
 
 mod async_generic_target;
 mod util;
@@ -22,21 +22,13 @@ pub fn async_generic(args: TokenStream, input: TokenStream) -> TokenStream {
             };
             async_generic_target::r#fn::expand(target_fn, async_signature).into()
         }
-        target_item @ (TargetItem::Trait(_) | TargetItem::Impl(_)) => {
+        TargetItem::TraitPart(target_trait_part) => {
             let later_attributes = if args.is_empty() {
                 LaterAttributes::default()
             } else {
                 parse_macro_input!(args as LaterAttributes)
             };
-            match target_item {
-                TargetItem::Trait(item) => {
-                    async_generic_target::trait_part::expand(item, later_attributes).into()
-                }
-                TargetItem::Impl(item) => {
-                    async_generic_target::trait_part::expand(item, later_attributes).into()
-                }
-                _ => unreachable!(),
-            }
+            async_generic_target::trait_part::expand(target_trait_part, later_attributes).into()
         }
     }
 }
