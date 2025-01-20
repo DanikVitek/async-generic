@@ -12,7 +12,8 @@ use syn::{
     Token, TraitItemFn,
 };
 
-use crate::async_generic_target::{r#fn::kind::Kind, state};
+use self::kind::Kind;
+use super::state;
 
 pub fn transform(
     target_fn: TargetItemFn,

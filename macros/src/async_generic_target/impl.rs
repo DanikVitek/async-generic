@@ -2,28 +2,28 @@ use std::marker::PhantomData;
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::ToTokens;
-use syn::{parse2, AttrStyle, Attribute, ItemTrait, Meta, MetaList, Result, TraitItem};
+use syn::{parse2, AttrStyle, Attribute, ImplItem, ItemImpl, Meta, MetaList, Result};
 
 use super::{
     r#fn::{AsyncGenericFn, TargetItemFn},
     state, LaterAttributes,
 };
 
-pub fn expand(target: ItemTrait, later_attributes: LaterAttributes) -> TokenStream2 {
-    AsyncGenericTrait::new(target, later_attributes)
+pub fn expand(target: ItemImpl, later_attributes: LaterAttributes) -> TokenStream2 {
+    AsyncGenericImpl::new(target, later_attributes)
         .rewrite()
         .map(|r#trait| r#trait.into_token_stream())
         .unwrap_or_else(|err| err.into_compile_error())
 }
 
-pub struct AsyncGenericTrait<S> {
-    target: ItemTrait,
+pub struct AsyncGenericImpl<S> {
+    target: ItemImpl,
     later_attributes: LaterAttributes,
     _state: PhantomData<S>,
 }
 
-impl AsyncGenericTrait<state::Initial> {
-    pub fn new(target: ItemTrait, later_attributes: LaterAttributes) -> Self {
+impl AsyncGenericImpl<state::Initial> {
+    pub fn new(target: ItemImpl, later_attributes: LaterAttributes) -> Self {
         Self {
             target,
             later_attributes,
@@ -32,14 +32,14 @@ impl AsyncGenericTrait<state::Initial> {
     }
 }
 
-impl AsyncGenericTrait<state::Initial> {
-    pub fn rewrite(mut self) -> Result<AsyncGenericTrait<state::Final>> {
+impl AsyncGenericImpl<state::Initial> {
+    pub fn rewrite(mut self) -> Result<AsyncGenericImpl<state::Final>> {
         let count = self
             .target
             .items
             .iter()
             .map(|item| match item {
-                TraitItem::Fn(trait_item_fn) => {
+                ImplItem::Fn(trait_item_fn) => {
                     if trait_item_fn.attrs.iter().any(|attr| {
                         matches!(attr.style, AttrStyle::Outer)
                             && attr.path().is_ident("async_generic")
@@ -56,34 +56,34 @@ impl AsyncGenericTrait<state::Initial> {
         let acc = Vec::with_capacity(count);
         self.target.items = self.target.items.into_iter().try_fold(
             acc,
-            |mut acc, item| -> Result<Vec<TraitItem>> {
+            |mut acc, item| -> Result<Vec<ImplItem>> {
                 match item {
-                    TraitItem::Fn(mut trait_item_fn) => {
+                    ImplItem::Fn(mut trait_item_fn) => {
                         match trait_item_fn.attrs.iter().position(|attr| {
                             matches!(attr.style, AttrStyle::Outer)
                                 && attr.path().is_ident("async_generic")
                         }) {
-                            None => acc.push(TraitItem::Fn(trait_item_fn)),
+                            None => acc.push(ImplItem::Fn(trait_item_fn)),
                             Some(i) => match &trait_item_fn.attrs[i].meta {
                                 Meta::Path(_) => {
                                     trait_item_fn.attrs.remove(i).meta;
                                     let (
                                         AsyncGenericFn {
-                                            target: TargetItemFn::Trait(sync_fn),
+                                            target: TargetItemFn::Impl(sync_fn),
                                             ..
                                         },
                                         AsyncGenericFn {
-                                            target: TargetItemFn::Trait(async_fn),
+                                            target: TargetItemFn::Impl(async_fn),
                                             ..
                                         },
                                     ) = super::r#fn::transform(
-                                        TargetItemFn::Trait(trait_item_fn),
+                                        TargetItemFn::Impl(trait_item_fn),
                                         None,
                                     )
                                     else {
                                         unreachable!()
                                     };
-                                    acc.extend([sync_fn, async_fn].map(TraitItem::Fn));
+                                    acc.extend([sync_fn, async_fn].map(ImplItem::Fn));
                                 }
                                 Meta::List(_) => {
                                     let meta = trait_item_fn.attrs.remove(i).meta;
@@ -93,23 +93,23 @@ impl AsyncGenericTrait<state::Initial> {
                                     let async_signature = parse2(args)?;
                                     let (
                                         AsyncGenericFn {
-                                            target: TargetItemFn::Trait(sync_fn),
+                                            target: TargetItemFn::Impl(sync_fn),
                                             ..
                                         },
                                         AsyncGenericFn {
-                                            target: TargetItemFn::Trait(async_fn),
+                                            target: TargetItemFn::Impl(async_fn),
                                             ..
                                         },
                                     ) = super::r#fn::transform(
-                                        TargetItemFn::Trait(trait_item_fn),
+                                        TargetItemFn::Impl(trait_item_fn),
                                         Some(async_signature),
                                     )
                                     else {
                                         unreachable!()
                                     };
-                                    acc.extend([sync_fn, async_fn].map(TraitItem::Fn));
+                                    acc.extend([sync_fn, async_fn].map(ImplItem::Fn));
                                 }
-                                Meta::NameValue(_) => acc.push(TraitItem::Fn(trait_item_fn)),
+                                Meta::NameValue(_) => acc.push(ImplItem::Fn(trait_item_fn)),
                             },
                         }
                     }
@@ -129,7 +129,7 @@ impl AsyncGenericTrait<state::Initial> {
                 }),
         );
 
-        Ok(AsyncGenericTrait {
+        Ok(AsyncGenericImpl {
             target: self.target,
             later_attributes: self.later_attributes,
             _state: PhantomData,
@@ -137,7 +137,7 @@ impl AsyncGenericTrait<state::Initial> {
     }
 }
 
-impl ToTokens for AsyncGenericTrait<state::Final> {
+impl ToTokens for AsyncGenericImpl<state::Final> {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
         self.target.to_tokens(tokens);
     }

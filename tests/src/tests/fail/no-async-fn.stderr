@@ -1,4 +1,24 @@
+error: async_generic can only be used with functions, traits or impls
+ --> src/tests/fail/no-async-fn.rs:3:1
+  |
+3 | #[async_generic]
+  | ^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `async_generic` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error: an async_generic function should not be declared as async
+ --> src/tests/fail/no-async-fn.rs:4:1
+  |
+4 | async fn do_some_stuff() -> bool {
+  | ^^^^^
+
+error: expected `trait`
+ --> src/tests/fail/no-async-fn.rs:4:1
+  |
+4 | async fn do_some_stuff() -> bool {
+  | ^^^^^
+
+error: expected `impl`
  --> src/tests/fail/no-async-fn.rs:4:1
   |
 4 | async fn do_some_stuff() -> bool {
