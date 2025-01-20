@@ -22,21 +22,21 @@ pub fn async_generic(args: TokenStream, input: TokenStream) -> TokenStream {
             };
             async_generic_target::r#fn::expand(target_fn, async_signature).into()
         }
-        TargetItem::Trait(target_trait) => {
+        target_item @ (TargetItem::Trait(_) | TargetItem::Impl(_)) => {
             let later_attributes = if args.is_empty() {
                 LaterAttributes::default()
             } else {
                 parse_macro_input!(args as LaterAttributes)
             };
-            async_generic_target::r#trait::expand(target_trait, later_attributes).into()
-        }
-        TargetItem::Impl(target_impl) => {
-            let later_attributes = if args.is_empty() {
-                LaterAttributes::default()
-            } else {
-                parse_macro_input!(args as LaterAttributes)
-            };
-            async_generic_target::r#impl::expand(target_impl, later_attributes).into()
+            match target_item {
+                TargetItem::Trait(item) => {
+                    async_generic_target::trait_part::expand(item, later_attributes).into()
+                }
+                TargetItem::Impl(item) => {
+                    async_generic_target::trait_part::expand(item, later_attributes).into()
+                }
+                _ => unreachable!(),
+            }
         }
     }
 }

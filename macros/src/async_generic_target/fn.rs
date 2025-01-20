@@ -15,17 +15,28 @@ use syn::{
 use self::kind::Kind;
 use super::state;
 
+#[inline]
 pub fn transform(
-    target_fn: TargetItemFn,
+    target_fn: impl Into<TargetItemFn>,
     async_signature: Option<AsyncSignature>,
 ) -> (
     AsyncGenericFn<kind::Sync, state::Final>,
     AsyncGenericFn<kind::Async, state::Final>,
 ) {
-    (
-        AsyncGenericFn::<kind::Sync, _>::new(target_fn.clone()).rewrite(),
-        AsyncGenericFn::<kind::Async, _>::new(target_fn, async_signature).rewrite(),
-    )
+    fn transform(
+        target_fn: TargetItemFn,
+        async_signature: Option<AsyncSignature>,
+    ) -> (
+        AsyncGenericFn<kind::Sync, state::Final>,
+        AsyncGenericFn<kind::Async, state::Final>,
+    ) {
+        (
+            AsyncGenericFn::<kind::Sync, _>::new(target_fn.clone()).rewrite(),
+            AsyncGenericFn::<kind::Async, _>::new(target_fn, async_signature).rewrite(),
+        )
+    }
+    
+    transform(target_fn.into(), async_signature)
 }
 
 pub fn expand(target_fn: TargetItemFn, async_signature: Option<AsyncSignature>) -> TokenStream2 {
@@ -50,6 +61,57 @@ impl TargetItemFn {
             Self::FreeStanding(f) => &f.sig,
             Self::Trait(f) => &f.sig,
             Self::Impl(f) => &f.sig,
+        }
+    }
+}
+
+impl From<ItemFn> for TargetItemFn {
+    fn from(f: ItemFn) -> Self {
+        Self::FreeStanding(f)
+    }
+}
+
+impl From<TraitItemFn> for TargetItemFn {
+    fn from(f: TraitItemFn) -> Self {
+        Self::Trait(f)
+    }
+}
+
+impl From<ImplItemFn> for TargetItemFn {
+    fn from(f: ImplItemFn) -> Self {
+        Self::Impl(f)
+    }
+}
+
+impl TryFrom<TargetItemFn> for ItemFn {
+    type Error = TargetItemFn;
+
+    fn try_from(value: TargetItemFn) -> Result<Self, Self::Error> {
+        match value {
+            TargetItemFn::FreeStanding(f) => Ok(f),
+            _ => Err(value),
+        }
+    }
+}
+
+impl TryFrom<TargetItemFn> for TraitItemFn {
+    type Error = TargetItemFn;
+
+    fn try_from(value: TargetItemFn) -> Result<Self, Self::Error> {
+        match value {
+            TargetItemFn::Trait(f) => Ok(f),
+            _ => Err(value),
+        }
+    }
+}
+
+impl TryFrom<TargetItemFn> for ImplItemFn {
+    type Error = TargetItemFn;
+
+    fn try_from(value: TargetItemFn) -> Result<Self, Self::Error> {
+        match value {
+            TargetItemFn::Impl(f) => Ok(f),
+            _ => Err(value),
         }
     }
 }

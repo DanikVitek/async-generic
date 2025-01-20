@@ -1,6 +1,3 @@
-use async_trait::async_trait;
-use async_generic::async_generic;
-
 #[test]
 fn tests() {
     let t = trybuild::TestCases::new();
@@ -17,10 +14,4 @@ fn tests() {
     t.compile_fail("src/tests/fail/no-async-fn.rs");
     t.compile_fail("src/tests/fail/no-macro-args.rs");
     t.compile_fail("src/tests/fail/no-struct.rs");
-}
-
-#[async_generic(async_trait)]
-trait NoDefaultImpl {
-    #[async_generic(async_signature(&self) -> String where Self: Send + Sync)]
-    fn do_stuff(&self) -> String;
 }

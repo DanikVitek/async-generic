@@ -8,8 +8,7 @@ use syn::{
 use self::r#fn::TargetItemFn;
 
 pub mod r#fn;
-pub mod r#impl;
-pub mod r#trait;
+pub mod trait_part;
 
 pub mod state {
     pub struct Initial;
