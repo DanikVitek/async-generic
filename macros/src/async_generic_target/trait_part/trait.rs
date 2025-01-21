@@ -1,6 +1,5 @@
 use syn::{Attribute, ItemTrait, TraitItem, TraitItemFn};
-use crate::core_attr::cfg::CfgAttribute;
-use crate::core_attr::cfg_attr::CfgAttrAttribute;
+
 use super::{HasAttributes, TraitPart, TraitPartItem};
 
 impl TraitPart for ItemTrait {
@@ -51,13 +50,5 @@ impl HasAttributes for TraitItemFn {
 
     fn remove_attr(&mut self, i: usize) -> Attribute {
         self.attrs.remove(i)
-    }
-
-    fn push_cfg(&mut self, cfg: CfgAttribute) {
-        self.attrs.push(cfg.into());
-    }
-
-    fn push_cfg_attr(&mut self, cfg_attr: CfgAttrAttribute) {
-        self.attrs.push(cfg_attr.into());
     }
 }

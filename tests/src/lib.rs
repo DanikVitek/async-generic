@@ -16,14 +16,3 @@ fn tests() {
     t.compile_fail("src/tests/fail/no-macro-args.rs");
     t.compile_fail("src/tests/fail/no-struct.rs");
 }
-
-use std::io::Result;
-
-use async_trait::async_trait;
-use async_generic::async_generic;
-
-#[async_generic(async_trait)]
-trait Read {
-    #[cfg_attr(feature = "async", async_generic)]
-    fn read(&mut self) -> Result<u8>;
-}

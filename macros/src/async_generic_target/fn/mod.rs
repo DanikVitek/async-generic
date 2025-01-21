@@ -3,13 +3,13 @@ use std::marker::PhantomData;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{
-    parenthesized,
+    bracketed, parenthesized,
     parse::{discouraged::Speculative, Parse, ParseStream},
     parse_quote,
     punctuated::Punctuated,
     visit_mut::{self, VisitMut},
-    Block, Error, Expr, ExprBlock, FnArg, Generics, ImplItemFn, ItemFn, ReturnType, Signature,
-    Token, TraitItemFn,
+    AttrStyle, Attribute, Block, Error, Expr, ExprBlock, FnArg, Generics, ImplItemFn, ItemFn,
+    ReturnType, Signature, Token, TraitItemFn,
 };
 
 use self::kind::Kind;
@@ -127,22 +127,22 @@ impl Parse for TargetItemFn {
             InspectExt::inspect(fork.parse().map(TargetItemFn::FreeStanding), |_| {
                 input.advance_to(&fork)
             })
-                .or_else(|mut err1| {
+            .or_else(|mut err1| {
+                let fork = input.fork();
+                InspectExt::inspect(fork.parse().map(TargetItemFn::Trait), |_| {
+                    input.advance_to(&fork)
+                })
+                .or_else(|err2| {
                     let fork = input.fork();
-                    InspectExt::inspect(fork.parse().map(TargetItemFn::Trait), |_| {
+                    InspectExt::inspect(fork.parse().map(TargetItemFn::Impl), |_| {
                         input.advance_to(&fork)
                     })
-                        .or_else(|err2| {
-                            let fork = input.fork();
-                            InspectExt::inspect(fork.parse().map(TargetItemFn::Impl), |_| {
-                                input.advance_to(&fork)
-                            })
-                                .map_err(|err3| {
-                                    err1.extend([err2, err3]);
-                                    err1
-                                })
-                        })
-                })?
+                    .map_err(|err3| {
+                        err1.extend([err2, err3]);
+                        err1
+                    })
+                })
+            })?
         };
 
         if let Some(r#async) = &target_fn.sig().asyncness {
@@ -167,6 +167,7 @@ impl ToTokens for TargetItemFn {
 }
 
 pub struct AsyncSignature {
+    attributes: Vec<Attribute>,
     generics: Generics,
     inputs: Punctuated<FnArg, Token![,]>,
     output: ReturnType,
@@ -174,11 +175,24 @@ pub struct AsyncSignature {
 
 impl Parse for AsyncSignature {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut attributes = Vec::new();
+        while input.peek(Token![#]) {
+            let content;
+            attributes.push(Attribute {
+                pound_token: input.parse()?,
+                style: match input.parse::<Option<Token![!]>>()? {
+                    None => AttrStyle::Outer,
+                    Some(not_token) => AttrStyle::Inner(not_token),
+                },
+                bracket_token: bracketed!(content in input),
+                meta: content.parse()?,
+            });
+        }
         let ident: Ident = input.parse()?;
-        if ident.to_string() != "async_signature" {
+        if ident != "async_signature" {
             return Err(Error::new(
                 ident.span(),
-                "async_generic can only take a async_signature argument",
+                "async_generic can only take an async_signature argument",
             ));
         }
 
@@ -197,24 +211,11 @@ impl Parse for AsyncSignature {
         };
 
         Ok(AsyncSignature {
+            attributes,
             generics,
             inputs,
             output,
         })
-    }
-}
-
-impl ToTokens for AsyncSignature {
-    fn to_tokens(&self, tokens: &mut TokenStream2) {
-        let Self {
-            inputs, generics, ..
-        } = self;
-        let where_clause = self.generics.where_clause.as_ref();
-
-        tokens.extend(quote! {
-            #generics(#inputs)
-            #where_clause
-        });
     }
 }
 
@@ -245,15 +246,13 @@ impl AsyncGenericFn<kind::Async, state::Initial> {
 }
 
 trait CanTransformBlock {
-    fn transform_block(initial: Option<Block>) -> Option<Block>;
+    fn transform_block(initial: Block) -> Block;
 }
 
 impl<A: CanCompareToPredicate> CanTransformBlock for A {
-    fn transform_block(initial: Option<Block>) -> Option<Block> {
-        initial.map(|mut block| {
-            IfAsyncRewriter::<A>(PhantomData).visit_block_mut(&mut block);
-            block
-        })
+    fn transform_block(mut initial: Block) -> Block {
+        IfAsyncRewriter::<A>(PhantomData).visit_block_mut(&mut initial);
+        initial
     }
 }
 
@@ -351,6 +350,7 @@ where
     pub fn rewrite(mut self) -> AsyncGenericFn<A, state::Final> {
         let target = match self.target {
             TargetItemFn::FreeStanding(f) => TargetItemFn::FreeStanding(ItemFn {
+                attrs: self.kind.extend_attrs(f.attrs),
                 sig: Signature {
                     constness: A::transform_constness(f.sig.constness),
                     asyncness: A::asyncness(),
@@ -360,10 +360,11 @@ where
                     output: self.kind.transform_output(f.sig.output),
                     ..f.sig
                 },
-                block: Box::new(A::transform_block(Some(*f.block)).unwrap()),
+                block: Box::new(A::transform_block(*f.block)),
                 ..f
             }),
             TargetItemFn::Trait(f) => TargetItemFn::Trait(TraitItemFn {
+                attrs: self.kind.extend_attrs(f.attrs),
                 sig: Signature {
                     constness: A::transform_constness(f.sig.constness),
                     asyncness: A::asyncness(),
@@ -373,10 +374,11 @@ where
                     output: self.kind.transform_output(f.sig.output),
                     ..f.sig
                 },
-                default: A::transform_block(f.default),
+                default: f.default.map(A::transform_block),
                 ..f
             }),
             TargetItemFn::Impl(f) => TargetItemFn::Impl(ImplItemFn {
+                attrs: self.kind.extend_attrs(f.attrs),
                 sig: Signature {
                     constness: A::transform_constness(f.sig.constness),
                     asyncness: A::asyncness(),
@@ -386,7 +388,7 @@ where
                     output: self.kind.transform_output(f.sig.output),
                     ..f.sig
                 },
-                block: A::transform_block(Some(f.block)).unwrap(),
+                block: A::transform_block(f.block),
                 ..f
             }),
         };

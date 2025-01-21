@@ -1,5 +1,5 @@
 use proc_macro2::{Ident, Span};
-use syn::{punctuated::Punctuated, FnArg, Generics, ReturnType, Token};
+use syn::{punctuated::Punctuated, Attribute, FnArg, Generics, ReturnType, Token};
 
 use crate::AsyncSignature;
 
@@ -8,14 +8,18 @@ pub struct Sync;
 pub struct Async(pub(super) Option<AsyncSignature>);
 
 pub trait Kind {
+    fn transform_constness(constness: Option<Token![const]>) -> Option<Token![const]> {
+        constness
+    }
+
     fn asyncness() -> Option<Token![async]>;
+
+    fn extend_attrs(&mut self, attrs: Vec<Attribute>) -> Vec<Attribute> {
+        attrs
+    }
 
     fn transform_ident(ident: Ident) -> Ident {
         ident
-    }
-
-    fn transform_constness(constness: Option<Token![const]>) -> Option<Token![const]> {
-        constness
     }
 
     fn transform_generics(&mut self, generics: Generics) -> Generics {
@@ -41,8 +45,23 @@ impl Kind for Sync {
 }
 
 impl Kind for Async {
+    fn transform_constness(_constness: Option<Token!(const)>) -> Option<Token!(const)> {
+        None // TODO: retutn `constness` when `const async fn` is stabilized
+    }
+    
     fn asyncness() -> Option<Token![async]> {
         Some(Token![async](Span::call_site()))
+    }
+
+    fn extend_attrs(&mut self, mut attrs: Vec<Attribute>) -> Vec<Attribute> {
+        if let Some(alt_attrs) = self
+            .0
+            .as_mut()
+            .map(|AsyncSignature { attributes, .. }| std::mem::take(attributes))
+        {
+            attrs.extend(alt_attrs);
+        }
+        attrs
     }
 
     fn transform_ident(ident: Ident) -> Ident {

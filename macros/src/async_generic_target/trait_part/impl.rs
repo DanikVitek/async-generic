@@ -1,7 +1,6 @@
 use syn::{Attribute, ImplItem, ImplItemFn, ItemImpl};
 
 use super::{HasAttributes, TraitPart, TraitPartItem};
-use crate::core_attr::{cfg::CfgAttribute, cfg_attr::CfgAttrAttribute};
 
 impl TraitPart for ItemImpl {
     type Item = ImplItem;
@@ -51,13 +50,5 @@ impl HasAttributes for ImplItemFn {
 
     fn remove_attr(&mut self, index: usize) -> Attribute {
         self.attrs.remove(index)
-    }
-
-    fn push_cfg(&mut self, cfg: CfgAttribute) {
-        self.attrs.push(cfg.into())
-    }
-
-    fn push_cfg_attr(&mut self, cfg_attr: CfgAttrAttribute) {
-        self.attrs.push(cfg_attr.into())
     }
 }

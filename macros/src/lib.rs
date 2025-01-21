@@ -8,7 +8,6 @@ use self::async_generic_target::{r#fn::AsyncSignature, trait_part::LaterAttribut
 
 mod async_generic_target;
 mod util;
-mod core_attr;
 
 #[proc_macro_attribute]
 pub fn async_generic(args: TokenStream, input: TokenStream) -> TokenStream {
