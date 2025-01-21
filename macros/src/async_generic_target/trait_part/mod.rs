@@ -6,12 +6,22 @@ use syn::{
     parse::{discouraged::Speculative, Parse, ParseStream},
     parse2,
     punctuated::Punctuated,
+    spanned::Spanned,
+    token::Paren,
     AttrStyle, Attribute, ItemImpl, ItemTrait, Meta, MetaList, Token,
 };
 
 use super::{
     r#fn::{AsyncGenericFn, TargetItemFn},
     state,
+};
+use crate::{
+    core_attr::{
+        self,
+        cfg::{CfgAttribute, CfgMeta},
+        cfg_attr::{CfgAttrAttribute, CfgAttrMeta},
+    },
+    util::LetExt,
 };
 
 pub mod r#impl;
@@ -86,7 +96,7 @@ pub trait TraitPart: ToTokens {
 }
 
 pub trait TraitPartItem {
-    type ItemFn: HasAttributes + Into<TargetItemFn> + TryFrom<TargetItemFn>;
+    type ItemFn: Clone + HasAttributes + Into<TargetItemFn> + TryFrom<TargetItemFn>;
 
     fn as_item_fn(&self) -> Option<&Self::ItemFn>;
     fn to_item_fn(self) -> Result<Self::ItemFn, Self>
@@ -97,6 +107,8 @@ pub trait TraitPartItem {
 pub trait HasAttributes {
     fn attrs(&self) -> &[Attribute];
     fn remove_attr(&mut self, i: usize) -> Attribute;
+    fn push_cfg(&mut self, cfg: CfgAttribute);
+    fn push_cfg_attr(&mut self, cfg_attr: CfgAttrAttribute);
 }
 
 struct AsyncGenericTraitPart<T, S> {
@@ -120,61 +132,57 @@ where
     T: TraitPart,
 {
     pub fn rewrite(mut self) -> syn::Result<AsyncGenericTraitPart<T, state::Final>> {
-        let count = self
-            .target
-            .items()
-            .iter()
-            .map(|item| match item.as_item_fn() {
-                Some(trait_item_fn) => {
-                    if trait_item_fn.attrs().iter().any(|attr| {
-                        matches!(attr.style, AttrStyle::Outer)
-                            && attr.path().is_ident("async_generic")
-                            && matches!(attr.meta, Meta::Path(_) | Meta::List(_))
-                    }) {
-                        2
-                    } else {
-                        1
-                    }
-                }
-                None => 1,
-            })
-            .sum();
-        let acc = Vec::with_capacity(count);
         self.target.try_replace_items(|items| {
             items
                 .into_iter()
-                .try_fold(acc, |mut acc, item| -> syn::Result<Vec<T::Item>> {
+                .try_fold(vec![], |mut acc, item| -> syn::Result<Vec<T::Item>> {
                     match item.to_item_fn() {
+                        Err(trait_item) => acc.push(trait_item),
                         Ok(mut trait_item_fn) => {
-                            match trait_item_fn.attrs().iter().position(|attr| {
-                                matches!(attr.style, AttrStyle::Outer)
-                                    && attr.path().is_ident("async_generic")
-                            }) {
-                                None => acc.push(From::from(trait_item_fn)),
-                                Some(i) => match &trait_item_fn.attrs()[i].meta {
-                                    Meta::Path(_) => {
-                                        trait_item_fn.remove_attr(i).meta;
-                                        let (
-                                            AsyncGenericFn {
-                                                target: sync_fn, ..
-                                            },
-                                            AsyncGenericFn {
-                                                target: async_fn, ..
-                                            },
-                                        ) = super::r#fn::transform(trait_item_fn, None);
-                                        acc.extend([sync_fn, async_fn].map(|r#fn| {
-                                            From::from(
-                                                TryFrom::try_from(r#fn)
-                                                    .unwrap_or_else(|_| unreachable!()),
-                                            )
-                                        }));
-                                    }
-                                    Meta::List(_) => {
-                                        let meta = trait_item_fn.remove_attr(i).meta;
-                                        let Meta::List(MetaList { tokens: args, .. }) = meta else {
-                                            unreachable!();
+                            let suitable_attrs = trait_item_fn
+                                .attrs()
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(idx, attr)| {
+                                    matches!(attr.style, AttrStyle::Outer).r#let(|outer| {
+                                        attr.path().r#let(|path| {
+                                            if outer && path.is_ident("async_generic") {
+                                                Some(SuitableAttrsIdx::AsyncGeneric(idx))
+                                            } else if outer && path.is_ident("cfg_attr") {
+                                                Some(SuitableAttrsIdx::CfgAttr(idx))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                    })
+                                })
+                                .collect::<Vec<_>>();
+                            if suitable_attrs.is_empty() {
+                                acc.push(From::from(trait_item_fn));
+                                return Ok(acc);
+                            }
+                            for suitable_attr in suitable_attrs {
+                                match suitable_attr {
+                                    SuitableAttrsIdx::AsyncGeneric(i) => {
+                                        let async_signature = match &trait_item_fn.attrs()[i].meta {
+                                            Meta::Path(_) => {
+                                                trait_item_fn.remove_attr(i).meta;
+                                                None
+                                            }
+                                            Meta::List(_) => {
+                                                let meta = trait_item_fn.remove_attr(i).meta;
+                                                let Meta::List(MetaList { tokens: args, .. }) =
+                                                    meta
+                                                else {
+                                                    unreachable!();
+                                                };
+                                                Some(parse2(args)?)
+                                            }
+                                            Meta::NameValue(_) => {
+                                                acc.push(T::Item::from(trait_item_fn));
+                                                return Ok(acc);
+                                            }
                                         };
-                                        let async_signature = parse2(args)?;
                                         let (
                                             AsyncGenericFn {
                                                 target: sync_fn, ..
@@ -183,24 +191,109 @@ where
                                                 target: async_fn, ..
                                             },
                                         ) = super::r#fn::transform(
-                                            trait_item_fn,
-                                            Some(async_signature),
+                                            trait_item_fn.clone(),
+                                            async_signature,
                                         );
-                                        acc.extend([sync_fn, async_fn].map(|r#fn| {
-                                            From::from(
-                                                TryFrom::try_from(r#fn)
+                                        acc.extend([sync_fn, async_fn].map(|f| {
+                                            T::Item::from(
+                                                <T::Item as TraitPartItem>::ItemFn::try_from(f)
                                                     .unwrap_or_else(|_| unreachable!()),
                                             )
                                         }));
+                                        return Ok(acc);
                                     }
-                                    Meta::NameValue(_) => acc.push(From::from(
-                                        TryFrom::try_from(trait_item_fn)
-                                            .unwrap_or_else(|_| unreachable!()),
-                                    )),
-                                },
+                                    SuitableAttrsIdx::CfgAttr(i) => {
+                                        let attr = trait_item_fn.remove_attr(i);
+                                        let cfg_attr = attr.parse_args::<CfgAttrMeta>()?;
+                                        let Some(i) = cfg_attr.attrs.iter().position(|meta| {
+                                            meta.path().is_ident("async_generic")
+                                                && matches!(meta, Meta::Path(_) | Meta::List(_))
+                                        }) else {
+                                            acc.push(T::Item::from(trait_item_fn.clone()));
+                                            continue;
+                                        };
+                                        let meta = cfg_attr.attrs[i].clone();
+                                        let async_signature = match meta {
+                                            Meta::Path(_) => None,
+                                            Meta::List(MetaList { tokens: args, .. }) => {
+                                                Some(parse2(args)?)
+                                            }
+                                            Meta::NameValue(_) => unreachable!(),
+                                        };
+                                        let (
+                                            AsyncGenericFn {
+                                                target: sync_fn, ..
+                                            },
+                                            AsyncGenericFn {
+                                                target: async_fn, ..
+                                            },
+                                        ) = super::r#fn::transform(
+                                            trait_item_fn.clone(),
+                                            async_signature,
+                                        );
+                                        let [mut sync_fn, mut async_fn] =
+                                            [sync_fn, async_fn].map(|f| {
+                                                <T::Item as TraitPartItem>::ItemFn::try_from(f)
+                                                    .unwrap_or_else(|_| unreachable!())
+                                            });
+                                        async_fn.push_cfg(CfgAttribute {
+                                            pound_token: attr.pound_token,
+                                            style: attr.style,
+                                            bracket_token: attr.bracket_token,
+                                            cfg_token: core_attr::kw::cfg(attr.meta.path().span()),
+                                            paren_token: Paren(
+                                                *attr
+                                                    .meta
+                                                    .require_list()
+                                                    .unwrap_or_else(|_| unreachable!())
+                                                    .delimiter
+                                                    .span(),
+                                            ),
+                                            meta: CfgMeta {
+                                                predicate: cfg_attr.predicate.clone(),
+                                            },
+                                        });
+
+                                        if cfg_attr.attrs.len() == 1 {
+                                            acc.extend([sync_fn, async_fn].map(T::Item::from));
+                                            continue;
+                                        }
+
+                                        let rest_cfg_attr = CfgAttrAttribute {
+                                            pound_token: attr.pound_token,
+                                            style: attr.style,
+                                            bracket_token: attr.bracket_token,
+                                            cfg_attr_token: core_attr::kw::cfg_attr(
+                                                attr.meta.path().span(),
+                                            ),
+                                            paren_token: Paren(
+                                                attr.meta
+                                                    .require_list()
+                                                    .unwrap_or_else(|_| unreachable!())
+                                                    .delimiter
+                                                    .span()
+                                                    .clone(),
+                                            ),
+                                            meta: CfgAttrMeta {
+                                                attrs: cfg_attr
+                                                    .attrs
+                                                    .into_pairs()
+                                                    .enumerate()
+                                                    .filter_map(|(j, pair)| {
+                                                        (j != i).then_some(pair)
+                                                    })
+                                                    .collect(),
+                                                ..cfg_attr
+                                            },
+                                        };
+                                        sync_fn.push_cfg_attr(rest_cfg_attr.clone());
+                                        async_fn.push_cfg_attr(rest_cfg_attr);
+
+                                        acc.extend([sync_fn, async_fn].map(T::Item::from));
+                                    }
+                                }
                             }
                         }
-                        Err(trait_item) => acc.push(trait_item),
                     }
                     Ok(acc)
                 })
@@ -222,6 +315,11 @@ where
             _state: PhantomData,
         })
     }
+}
+
+enum SuitableAttrsIdx {
+    AsyncGeneric(usize),
+    CfgAttr(usize),
 }
 
 impl<T> ToTokens for AsyncGenericTraitPart<T, state::Final>
