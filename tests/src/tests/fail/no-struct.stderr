@@ -1,4 +1,4 @@
-error: async_generic can only be used with functions, traits or impls
+error: `async_generic` can only be used on `fn`, `trait` or `impl`
  --> src/tests/fail/no-struct.rs:3:1
   |
 3 | #[async_generic]
@@ -12,13 +12,7 @@ error: expected `fn`
 4 | struct Struct {}
   | ^^^^^^
 
-error: expected `trait`
- --> src/tests/fail/no-struct.rs:4:1
-  |
-4 | struct Struct {}
-  | ^^^^^^
-
-error: expected `impl`
+error: expected `trait` or `impl`
  --> src/tests/fail/no-struct.rs:4:1
   |
 4 | struct Struct {}

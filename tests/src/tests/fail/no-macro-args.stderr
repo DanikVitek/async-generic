@@ -1,4 +1,4 @@
-error: async_generic can only take an async_signature argument
+error: `async_generic` on `fn` can only take an `async_signature` argument
  --> src/tests/fail/no-macro-args.rs:3:17
   |
 3 | #[async_generic(Send)]

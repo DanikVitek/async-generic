@@ -5,7 +5,9 @@ use crate::AsyncSignature;
 
 pub struct Sync;
 
-pub struct Async(pub(super) Option<AsyncSignature>);
+pub struct Async<const PRESERVE_IDENT: bool> {
+    pub(super) signature: Option<AsyncSignature>,
+}
 
 pub trait Kind {
     fn transform_constness(constness: Option<Token![const]>) -> Option<Token![const]> {
@@ -44,7 +46,7 @@ impl Kind for Sync {
     }
 }
 
-impl Kind for Async {
+impl<const PRESERVE_IDENT: bool> Kind for Async<PRESERVE_IDENT> {
     fn transform_constness(_constness: Option<Token!(const)>) -> Option<Token!(const)> {
         None // TODO: retutn `constness` when `const async fn` is stabilized
     }
@@ -55,9 +57,9 @@ impl Kind for Async {
 
     fn extend_attrs(&mut self, mut attrs: Vec<Attribute>) -> Vec<Attribute> {
         if let Some(alt_attrs) = self
-            .0
+            .signature
             .as_mut()
-            .map(|AsyncSignature { attributes, .. }| std::mem::take(attributes))
+            .map(|AsyncSignature { attrs: attributes, .. }| std::mem::take(attributes))
         {
             attrs.extend(alt_attrs);
         }
@@ -65,12 +67,16 @@ impl Kind for Async {
     }
 
     fn transform_ident(ident: Ident) -> Ident {
-        Ident::new(&format!("{ident}_async"), ident.span())
+        if PRESERVE_IDENT {
+            ident
+        } else {
+            Ident::new(&format!("{ident}_async"), ident.span())
+        }
     }
 
     fn transform_generics(&mut self, generics: Generics) -> Generics {
         if let Some(alt_generics) = self
-            .0
+            .signature
             .as_mut()
             .map(|AsyncSignature { generics, .. }| std::mem::take(generics))
         {
@@ -85,7 +91,7 @@ impl Kind for Async {
         inputs: Punctuated<FnArg, Token!(,)>,
     ) -> Punctuated<FnArg, Token!(,)> {
         if let Some(alt_inputs) = self
-            .0
+            .signature
             .as_mut()
             .map(|AsyncSignature { inputs, .. }| std::mem::take(inputs))
         {
@@ -96,7 +102,7 @@ impl Kind for Async {
     }
 
     fn transform_output(&mut self, output: ReturnType) -> ReturnType {
-        if let Some(alt_output) = self.0.as_mut().map(|AsyncSignature { output, .. }| {
+        if let Some(alt_output) = self.signature.as_mut().map(|AsyncSignature { output, .. }| {
             let mut default = ReturnType::Default;
             std::mem::swap(output, &mut default);
             default

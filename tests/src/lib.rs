@@ -5,6 +5,7 @@ fn tests() {
     t.pass("src/tests/pass/fn-with-types.rs");
     t.pass("src/tests/pass/generic-fn.rs");
     t.pass("src/tests/pass/generic-fn-with-visibility.rs");
+    t.pass("src/tests/pass/generic-trait.rs");
     t.pass("src/tests/pass/struct-method-generic.rs");
     t.pass("src/tests/pass/trait-fn.rs");
     t.pass("src/tests/pass/trait-fn-cfg.rs");

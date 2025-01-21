@@ -3,7 +3,10 @@ use core::fmt::{Debug, Display};
 use async_generic::async_generic;
 use async_trait::async_trait;
 
-#[async_generic(async_trait)]
+#[async_generic(
+    #[async_trait]
+    sync_trait
+)]
 trait NoDefaultImpl {
     #[async_generic(async_signature(&self) -> String where Self: Send + Sync)]
     fn do_stuff(&self) -> String;
@@ -11,7 +14,10 @@ trait NoDefaultImpl {
 
 struct StructA;
 
-#[async_generic(async_trait)]
+#[async_generic(
+    #[async_trait]
+    sync_trait
+)]
 impl NoDefaultImpl for StructA {
     #[async_generic(async_signature(&self) -> String where Self: Send + Sync)]
     fn do_stuff(&self) -> String {
@@ -29,7 +35,10 @@ impl StructA {
     }
 }
 
-#[async_generic(async_trait)]
+#[async_generic(
+    #[async_trait]
+    sync_trait
+)]
 trait DefaultImpl {
     #[async_generic(async_signature(&self) -> String where Self: Send + Sync)]
     fn do_stuff(&self) -> String {
@@ -53,7 +62,10 @@ struct StructB;
 #[async_trait]
 impl DefaultImpl for StructB {}
 
-#[async_generic(async_trait)]
+#[async_generic(
+    #[async_trait]
+    sync_trait
+)]
 trait DefaultImplGenericParam {
     #[async_generic(
         async_signature<T>(&self, inp: &T) -> String

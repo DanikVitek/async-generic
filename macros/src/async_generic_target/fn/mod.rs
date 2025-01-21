@@ -3,50 +3,56 @@ use std::marker::PhantomData;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, ToTokens};
 use syn::{
-    bracketed, parenthesized,
+    parenthesized,
     parse::{discouraged::Speculative, Parse, ParseStream},
     parse_quote,
     punctuated::Punctuated,
     visit_mut::{self, VisitMut},
-    AttrStyle, Attribute, Block, Error, Expr, ExprBlock, FnArg, Generics, ImplItemFn, ItemFn,
-    ReturnType, Signature, Token, TraitItemFn,
+    Attribute, Block, Error, Expr, ExprBlock, FnArg, Generics, ImplItemFn, ItemFn, ReturnType,
+    Signature, Token, TraitItemFn,
 };
 
 use self::kind::Kind;
-use super::state;
+use super::{parse_attrs, state};
 
 pub mod kind;
 
 pub mod kw {
-    syn::custom_keyword!(async_signature);
+    use syn::custom_keyword;
+
+    custom_keyword!(async_signature);
 }
 
+const ERROR_PARSE_ARGS: &str =
+    "`async_generic` on `fn` can only take an `async_signature` argument";
+const ERROR_ASYNC_FN: &str = "an `async_generic` function should not be declared `async`";
+
 #[inline]
-pub fn transform(
+pub fn split<const PRESERVE_IDENT: bool>(
     target_fn: impl Into<TargetItemFn>,
-    async_signature: Option<AsyncSignature>,
+    args: AsyncGenericArgs,
 ) -> (
     AsyncGenericFn<kind::Sync, state::Final>,
-    AsyncGenericFn<kind::Async, state::Final>,
+    AsyncGenericFn<kind::Async<PRESERVE_IDENT>, state::Final>,
 ) {
-    fn transform(
+    fn transform<const PRESERVE_IDENT: bool>(
         target_fn: TargetItemFn,
         async_signature: Option<AsyncSignature>,
     ) -> (
         AsyncGenericFn<kind::Sync, state::Final>,
-        AsyncGenericFn<kind::Async, state::Final>,
+        AsyncGenericFn<kind::Async<PRESERVE_IDENT>, state::Final>,
     ) {
         (
             AsyncGenericFn::<kind::Sync, _>::new(target_fn.clone()).rewrite(),
-            AsyncGenericFn::<kind::Async, _>::new(target_fn, async_signature).rewrite(),
+            AsyncGenericFn::<kind::Async<PRESERVE_IDENT>, _>::new(target_fn, async_signature).rewrite(),
         )
     }
 
-    transform(target_fn.into(), async_signature)
+    transform(target_fn.into(), args.0)
 }
 
-pub fn expand(target_fn: TargetItemFn, async_signature: Option<AsyncSignature>) -> TokenStream2 {
-    let (sync_fn, async_fn) = transform(target_fn, async_signature);
+pub fn expand(target_fn: TargetItemFn, args: AsyncGenericArgs) -> TokenStream2 {
+    let (sync_fn, async_fn) = split::<false>(target_fn, args);
 
     quote! {
         #sync_fn
@@ -54,11 +60,27 @@ pub fn expand(target_fn: TargetItemFn, async_signature: Option<AsyncSignature>) 
     }
 }
 
+pub struct AsyncGenericArgs(pub Option<AsyncSignature>);
+
+pub struct AsyncSignature {
+    attrs: Vec<Attribute>,
+    _async_signature_token: kw::async_signature,
+    generics: Generics,
+    inputs: Punctuated<FnArg, Token![,]>,
+    output: ReturnType,
+}
+
 #[derive(Clone)]
 pub enum TargetItemFn {
     FreeStanding(ItemFn),
     Trait(TraitItemFn),
     Impl(ImplItemFn),
+}
+
+pub struct AsyncGenericFn<A, S> {
+    pub(super) target: TargetItemFn,
+    kind: A,
+    _state: PhantomData<S>,
 }
 
 impl TargetItemFn {
@@ -150,10 +172,7 @@ impl Parse for TargetItemFn {
         };
 
         if let Some(r#async) = &target_fn.sig().asyncness {
-            Err(Error::new(
-                r#async.span,
-                "an async_generic function should not be declared as async",
-            ))
+            Err(Error::new(r#async.span, ERROR_ASYNC_FN))
         } else {
             Ok(target_fn)
         }
@@ -170,35 +189,21 @@ impl ToTokens for TargetItemFn {
     }
 }
 
-pub struct AsyncSignature {
-    attributes: Vec<Attribute>,
-    _async_signature_token: kw::async_signature,
-    generics: Generics,
-    inputs: Punctuated<FnArg, Token![,]>,
-    output: ReturnType,
+impl Parse for AsyncGenericArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        (!input.is_empty())
+            .then(|| input.parse())
+            .transpose()
+            .map(Self)
+    }
 }
 
 impl Parse for AsyncSignature {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut attributes = Vec::new();
-        while input.peek(Token![#]) {
-            let content;
-            attributes.push(Attribute {
-                pound_token: input.parse()?,
-                style: match input.parse::<Option<Token![!]>>()? {
-                    None => AttrStyle::Outer,
-                    Some(not_token) => AttrStyle::Inner(not_token),
-                },
-                bracket_token: bracketed!(content in input),
-                meta: content.parse()?,
-            });
-        }
-        let async_signature_token = input.parse().map_err(|err| {
-            Error::new(
-                err.span(),
-                "async_generic can only take an async_signature argument",
-            )
-        })?;
+        let attrs = parse_attrs(input)?;
+        let async_signature_token = input
+            .parse()
+            .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
 
         let mut generics: Generics = input.parse()?;
 
@@ -209,25 +214,19 @@ impl Parse for AsyncSignature {
         let output = input.parse()?;
 
         generics.where_clause = if input.peek(Token![where]) {
-            input.parse()?
+            Some(input.parse()?)
         } else {
             None
         };
 
         Ok(AsyncSignature {
-            attributes,
+            attrs,
             _async_signature_token: async_signature_token,
             generics,
             inputs,
             output,
         })
     }
-}
-
-pub struct AsyncGenericFn<A, S> {
-    pub(super) target: TargetItemFn,
-    kind: A,
-    _state: PhantomData<S>,
 }
 
 impl AsyncGenericFn<kind::Sync, state::Initial> {
@@ -240,11 +239,11 @@ impl AsyncGenericFn<kind::Sync, state::Initial> {
     }
 }
 
-impl AsyncGenericFn<kind::Async, state::Initial> {
+impl<const PRESERVE_IDENT: bool> AsyncGenericFn<kind::Async<PRESERVE_IDENT>, state::Initial> {
     pub(crate) const fn new(target: TargetItemFn, sig: Option<AsyncSignature>) -> Self {
         Self {
             target,
-            kind: kind::Async(sig),
+            kind: kind::Async { signature: sig },
             _state: PhantomData,
         }
     }
@@ -287,7 +286,7 @@ impl CanCompareToPredicate for kind::Sync {
     }
 }
 
-impl CanCompareToPredicate for kind::Async {
+impl<const PRESERVE_IDENT: bool> CanCompareToPredicate for kind::Async<PRESERVE_IDENT> {
     fn cmp(predicate: AsyncPredicate) -> bool {
         matches!(predicate, AsyncPredicate::Async)
     }
@@ -336,10 +335,13 @@ where
         let Some(ident) = cond.path.get_ident() else {
             return;
         };
-        let predicate = match ident.to_string().as_str() {
-            "_sync" => AsyncPredicate::Sync,
-            "_async" => AsyncPredicate::Async,
-            _ => return,
+
+        let predicate = if *ident == "_sync" {
+            AsyncPredicate::Sync
+        } else if ident == "_async" {
+            AsyncPredicate::Async
+        } else {
+            return;
         };
         let then_branch = expr_if.then_branch.clone();
         let else_branch = expr_if.else_branch.as_ref().map(|eb| *eb.1.clone());

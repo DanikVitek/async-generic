@@ -3,7 +3,10 @@ use std::io::Result;
 use async_trait::async_trait;
 use async_generic::async_generic;
 
-#[async_generic(async_trait)]
+#[async_generic(
+    #[async_trait]
+    sync_trait
+)]
 trait Read {
     #[async_generic(
         #[cfg(feature = "async")]
