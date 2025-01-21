@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use proc_macro2::{Ident, TokenStream as TokenStream2};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, ToTokens};
 use syn::{
     bracketed, parenthesized,
@@ -16,6 +16,10 @@ use self::kind::Kind;
 use super::state;
 
 pub mod kind;
+
+pub mod kw {
+    syn::custom_keyword!(async_signature);
+}
 
 #[inline]
 pub fn transform(
@@ -168,6 +172,7 @@ impl ToTokens for TargetItemFn {
 
 pub struct AsyncSignature {
     attributes: Vec<Attribute>,
+    _async_signature_token: kw::async_signature,
     generics: Generics,
     inputs: Punctuated<FnArg, Token![,]>,
     output: ReturnType,
@@ -188,13 +193,12 @@ impl Parse for AsyncSignature {
                 meta: content.parse()?,
             });
         }
-        let ident: Ident = input.parse()?;
-        if ident != "async_signature" {
-            return Err(Error::new(
-                ident.span(),
+        let async_signature_token = input.parse().map_err(|err| {
+            Error::new(
+                err.span(),
                 "async_generic can only take an async_signature argument",
-            ));
-        }
+            )
+        })?;
 
         let mut generics: Generics = input.parse()?;
 
@@ -212,6 +216,7 @@ impl Parse for AsyncSignature {
 
         Ok(AsyncSignature {
             attributes,
+            _async_signature_token: async_signature_token,
             generics,
             inputs,
             output,
