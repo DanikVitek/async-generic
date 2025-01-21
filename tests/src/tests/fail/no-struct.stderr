@@ -12,7 +12,13 @@ error: expected `fn`
 4 | struct Struct {}
   | ^^^^^^
 
-error: expected `trait` or `impl`
+error: expected `trait`
+ --> src/tests/fail/no-struct.rs:4:1
+  |
+4 | struct Struct {}
+  | ^^^^^^
+
+error: expected `impl`
  --> src/tests/fail/no-struct.rs:4:1
   |
 4 | struct Struct {}

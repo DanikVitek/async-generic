@@ -9,7 +9,7 @@ use syn::{
     AttrStyle, Attribute, Error, Generics, ItemImpl, ItemTrait, Meta, MetaList, Path, Token,
     TypeParamBound,
 };
-
+use syn::parse::discouraged::Speculative;
 use super::{
     parse_attrs, r#fn,
     r#fn::{AsyncGenericFn, AsyncSignature, TargetItemFn},
@@ -191,13 +191,26 @@ impl Parse for AsyncTrait {
 
 impl Parse for TargetTraitPart {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        if input.peek(Token![trait]) {
-            Ok(TargetTraitPart::Trait(input.parse()?))
-        } else if input.peek(Token![impl]) {
-            Ok(TargetTraitPart::Impl(input.parse()?))
-        } else {
-            Err(input.error("expected `trait` or `impl`"))
-        }
+        let target_item = {
+            use crate::util::InspectExt;
+
+            let fork = input.fork();
+            InspectExt::inspect(fork.parse().map(TargetTraitPart::Trait), |_| {
+                input.advance_to(&fork)
+            })
+                .or_else(|mut err1| {
+                    let fork = input.fork();
+                    InspectExt::inspect(fork.parse().map(TargetTraitPart::Impl), |_| {
+                        input.advance_to(&fork)
+                    })
+                        .map_err(|err2| {
+                            err1.extend(Some(err2));
+                            err1
+                        })
+                })?
+        };
+
+        Ok(target_item)
     }
 }
 

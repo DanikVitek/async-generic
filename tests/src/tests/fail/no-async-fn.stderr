@@ -12,7 +12,13 @@ error: an `async_generic` function should not be declared `async`
 4 | async fn do_some_stuff() -> bool {
   | ^^^^^
 
-error: expected `trait` or `impl`
+error: expected `trait`
+ --> src/tests/fail/no-async-fn.rs:4:1
+  |
+4 | async fn do_some_stuff() -> bool {
+  | ^^^^^
+
+error: expected `impl`
  --> src/tests/fail/no-async-fn.rs:4:1
   |
 4 | async fn do_some_stuff() -> bool {
