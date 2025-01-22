@@ -3,13 +3,14 @@ use core::marker::PhantomData;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::ToTokens;
 use syn::{
-    parse::{Parse, ParseStream},
+    parse::{discouraged::Speculative, Parse, ParseStream},
     parse2,
     punctuated::Punctuated,
+    spanned::Spanned,
     AttrStyle, Attribute, Error, Generics, ItemImpl, ItemTrait, Meta, MetaList, Path, Token,
     TypeParamBound,
 };
-use syn::parse::discouraged::Speculative;
+
 use super::{
     parse_attrs, r#fn,
     r#fn::{AsyncGenericFn, AsyncSignature, TargetItemFn},
@@ -198,16 +199,25 @@ impl Parse for TargetTraitPart {
             InspectExt::inspect(fork.parse().map(TargetTraitPart::Trait), |_| {
                 input.advance_to(&fork)
             })
-                .or_else(|mut err1| {
-                    let fork = input.fork();
-                    InspectExt::inspect(fork.parse().map(TargetTraitPart::Impl), |_| {
-                        input.advance_to(&fork)
-                    })
-                        .map_err(|err2| {
-                            err1.extend(Some(err2));
-                            err1
-                        })
-                })?
+            .or_else(|mut err1| -> syn::Result<_> {
+                let fork = input.fork();
+                let item_impl = match fork.parse::<ItemImpl>() {
+                    Ok(item_impl) if item_impl.trait_.is_none() => {
+                        err1.extend(Some(Error::new(
+                            item_impl.impl_token.span(),
+                            "expected `impl` for a `trait`",
+                        )));
+                        Err(err1)
+                    }
+                    Ok(item_impl) => Ok(item_impl),
+                    Err(err2) => {
+                        err1.extend(Some(err2));
+                        Err(err1)
+                    }
+                }?;
+                input.advance_to(&fork);
+                Ok(TargetTraitPart::Impl(item_impl))
+            })?
         };
 
         Ok(target_item)

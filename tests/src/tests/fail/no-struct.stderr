@@ -23,3 +23,29 @@ error: expected `impl`
   |
 4 | struct Struct {}
   | ^^^^^^
+
+error: `async_generic` can only be used on `fn`, `trait` or `impl`
+ --> src/tests/fail/no-struct.rs:6:1
+  |
+6 | #[async_generic]
+  | ^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `async_generic` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: expected `fn`
+ --> src/tests/fail/no-struct.rs:7:1
+  |
+7 | impl Struct {}
+  | ^^^^
+
+error: expected `trait`
+ --> src/tests/fail/no-struct.rs:7:1
+  |
+7 | impl Struct {}
+  | ^^^^
+
+error: expected `impl` for a `trait`
+ --> src/tests/fail/no-struct.rs:7:1
+  |
+7 | impl Struct {}
+  | ^^^^
