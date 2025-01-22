@@ -13,10 +13,6 @@ impl TraitPart for ItemTrait {
         self.ident = f(self.ident.clone());
     }
 
-    fn items(&self) -> &[Self::Item] {
-        &self.items
-    }
-
     fn items_mut(&mut self) -> &mut Vec<Self::Item> {
         &mut self.items
     }
@@ -44,13 +40,6 @@ impl TraitPart for ItemTrait {
 
 impl TraitPartItem for TraitItem {
     type ItemFn = TraitItemFn;
-
-    fn as_item_fn(&self) -> Option<&Self::ItemFn> {
-        match self {
-            TraitItem::Fn(item_fn) => Some(item_fn),
-            _ => None,
-        }
-    }
 
     fn to_item_fn(self) -> Result<Self::ItemFn, Self>
     where

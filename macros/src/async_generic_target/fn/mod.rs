@@ -20,11 +20,12 @@ pub mod kind;
 pub mod kw {
     use syn::custom_keyword;
 
+    custom_keyword!(sync_signature);
     custom_keyword!(async_signature);
 }
 
 const ERROR_PARSE_ARGS: &str =
-    "`async_generic` on `fn` can only take an `async_signature` argument";
+    "`async_generic` on `fn` can only take a `sync_signature` or an `async_signature` argument";
 const ERROR_ASYNC_FN: &str = "an `async_generic` function should not be declared `async`";
 
 #[inline]
@@ -35,20 +36,22 @@ pub fn split<const PRESERVE_IDENT: bool>(
     AsyncGenericFn<kind::Sync, state::Final>,
     AsyncGenericFn<kind::Async<PRESERVE_IDENT>, state::Final>,
 ) {
-    fn transform<const PRESERVE_IDENT: bool>(
+    fn split<const PRESERVE_IDENT: bool>(
         target_fn: TargetItemFn,
+        sync_signature: Option<SyncSignature>,
         async_signature: Option<AsyncSignature>,
     ) -> (
         AsyncGenericFn<kind::Sync, state::Final>,
         AsyncGenericFn<kind::Async<PRESERVE_IDENT>, state::Final>,
     ) {
         (
-            AsyncGenericFn::<kind::Sync, _>::new(target_fn.clone()).rewrite(),
-            AsyncGenericFn::<kind::Async<PRESERVE_IDENT>, _>::new(target_fn, async_signature).rewrite(),
+            AsyncGenericFn::<kind::Sync, _>::new(target_fn.clone(), sync_signature).rewrite(),
+            AsyncGenericFn::<kind::Async<PRESERVE_IDENT>, _>::new(target_fn, async_signature)
+                .rewrite(),
         )
     }
 
-    transform(target_fn.into(), args.0)
+    split(target_fn.into(), args.sync_signature, args.async_signature)
 }
 
 pub fn expand(target_fn: TargetItemFn, args: AsyncGenericArgs) -> TokenStream2 {
@@ -60,11 +63,24 @@ pub fn expand(target_fn: TargetItemFn, args: AsyncGenericArgs) -> TokenStream2 {
     }
 }
 
-pub struct AsyncGenericArgs(pub Option<AsyncSignature>);
+#[derive(Default)]
+pub struct AsyncGenericArgs {
+    pub sync_signature: Option<SyncSignature>,
+    pub async_signature: Option<AsyncSignature>,
+}
+
+pub struct SyncSignature {
+    attrs: Vec<Attribute>,
+    _sync_signature_token: kw::sync_signature,
+}
 
 pub struct AsyncSignature {
     attrs: Vec<Attribute>,
     _async_signature_token: kw::async_signature,
+    params: Option<AsyncSignatureParams>,
+}
+
+struct AsyncSignatureParams {
     generics: Generics,
     inputs: Punctuated<FnArg, Token![,]>,
     output: ReturnType,
@@ -191,10 +207,114 @@ impl ToTokens for TargetItemFn {
 
 impl Parse for AsyncGenericArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        (!input.is_empty())
-            .then(|| input.parse())
-            .transpose()
-            .map(Self)
+        let attrs = parse_attrs(input)?;
+        if input.peek(kw::sync_signature) {
+            parse_in_order_sync_async(input, attrs)
+        } else if input.peek(kw::async_signature) {
+            parse_in_order_async_sync(input, attrs)
+        } else if !input.is_empty() || !attrs.is_empty() {
+            Err(input.error(ERROR_PARSE_ARGS))
+        } else {
+            Ok(Self::default())
+        }
+    }
+}
+
+fn parse_in_order_sync_async(
+    input: ParseStream,
+    attrs: Vec<Attribute>,
+) -> syn::Result<AsyncGenericArgs> {
+    let mut sync_signature: SyncSignature = input.parse()?;
+    sync_signature.attrs.extend(attrs);
+    if input.is_empty() {
+        return Ok(AsyncGenericArgs {
+            sync_signature: Some(sync_signature),
+            async_signature: None,
+        });
+    }
+
+    let _: Token![,] = input.parse()?;
+    if input.is_empty() {
+        return Ok(AsyncGenericArgs {
+            sync_signature: Some(sync_signature),
+            async_signature: None,
+        });
+    }
+
+    let mut async_signature: AsyncSignature = input.parse()?;
+    let _: Option<Token![,]> = match async_signature.params.as_mut().and_then(|params| {
+        params
+            .generics
+            .where_clause
+            .as_mut()
+            .and_then(|where_clause| where_clause.predicates.pop_punct())
+    }) {
+        Some(comma_token) => Some(comma_token),
+        None => input.parse()?,
+    };
+    if !input.is_empty() {
+        return Err(input.error(ERROR_PARSE_ARGS));
+    }
+
+    Ok(AsyncGenericArgs {
+        sync_signature: Some(sync_signature),
+        async_signature: Some(async_signature),
+    })
+}
+
+fn parse_in_order_async_sync(
+    input: ParseStream,
+    attrs: Vec<Attribute>,
+) -> syn::Result<AsyncGenericArgs> {
+    let mut async_signature: AsyncSignature = input.parse()?;
+    async_signature.attrs.extend(attrs);
+    let _: Token![,] = match async_signature.params.as_mut().and_then(|params| {
+        params
+            .generics
+            .where_clause
+            .as_mut()
+            .and_then(|where_clause| where_clause.predicates.pop_punct())
+    }) {
+        None if input.is_empty() => {
+            return Ok(AsyncGenericArgs {
+                sync_signature: None,
+                async_signature: Some(async_signature),
+            })
+        }
+        None => input.parse()?,
+        Some(comma_token) => comma_token,
+    };
+
+    if input.is_empty() {
+        return Ok(AsyncGenericArgs {
+            async_signature: Some(async_signature),
+            sync_signature: None,
+        });
+    }
+
+    let sync_signature = input.parse()?;
+    let _: Option<Token![,]> = input.parse()?;
+    if !input.is_empty() {
+        return Err(input.error(ERROR_PARSE_ARGS));
+    }
+
+    Ok(AsyncGenericArgs {
+        sync_signature: Some(sync_signature),
+        async_signature: Some(async_signature),
+    })
+}
+
+impl Parse for SyncSignature {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let attrs = parse_attrs(input)?;
+        let sync_signature_token = input
+            .parse()
+            .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
+
+        Ok(SyncSignature {
+            attrs,
+            _sync_signature_token: sync_signature_token,
+        })
     }
 }
 
@@ -205,6 +325,24 @@ impl Parse for AsyncSignature {
             .parse()
             .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
 
+        if input.is_empty() || input.peek(Token![,]) {
+            return Ok(AsyncSignature {
+                attrs,
+                _async_signature_token: async_signature_token,
+                params: None,
+            });
+        }
+
+        Ok(AsyncSignature {
+            attrs,
+            _async_signature_token: async_signature_token,
+            params: Some(input.parse()?),
+        })
+    }
+}
+
+impl Parse for AsyncSignatureParams {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut generics: Generics = input.parse()?;
 
         let content;
@@ -219,9 +357,7 @@ impl Parse for AsyncSignature {
             None
         };
 
-        Ok(AsyncSignature {
-            attrs,
-            _async_signature_token: async_signature_token,
+        Ok(Self {
             generics,
             inputs,
             output,
@@ -230,10 +366,10 @@ impl Parse for AsyncSignature {
 }
 
 impl AsyncGenericFn<kind::Sync, state::Initial> {
-    pub(crate) const fn new(target: TargetItemFn) -> Self {
+    pub(crate) const fn new(target: TargetItemFn, sig: Option<SyncSignature>) -> Self {
         Self {
             target,
-            kind: kind::Sync,
+            kind: kind::Sync(sig),
             _state: PhantomData,
         }
     }
@@ -243,7 +379,7 @@ impl<const PRESERVE_IDENT: bool> AsyncGenericFn<kind::Async<PRESERVE_IDENT>, sta
     pub(crate) const fn new(target: TargetItemFn, sig: Option<AsyncSignature>) -> Self {
         Self {
             target,
-            kind: kind::Async { signature: sig },
+            kind: kind::Async(sig),
             _state: PhantomData,
         }
     }

@@ -5,7 +5,7 @@ use proc_macro::TokenStream;
 use syn::parse_macro_input;
 
 use crate::async_generic_target::{
-    r#fn::{self, AsyncSignature},
+    r#fn,
     trait_part, TargetItem,
 };
 

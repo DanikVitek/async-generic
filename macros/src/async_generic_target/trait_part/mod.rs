@@ -13,7 +13,7 @@ use syn::{
 
 use super::{
     parse_attrs, r#fn,
-    r#fn::{AsyncGenericFn, AsyncSignature, TargetItemFn},
+    r#fn::{AsyncGenericFn, TargetItemFn},
     state,
 };
 use crate::util::LetExt;
@@ -72,6 +72,7 @@ pub enum TargetTraitPart {
     Impl(ItemImpl),
 }
 
+#[derive(Default)]
 pub struct AsyncGenericArgs {
     sync_trait: Option<SyncTrait>,
     async_trait: Option<AsyncTrait>,
@@ -93,60 +94,94 @@ impl Parse for AsyncGenericArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = parse_attrs(input)?;
         if input.peek(kw::sync_trait) {
-            let mut sync_trait: SyncTrait = input.parse()?;
-            sync_trait.attrs.extend(attrs);
-            let _: Token![,] = if !input.is_empty() {
-                input.parse()?
-            } else {
-                return Ok(Self {
-                    sync_trait: Some(sync_trait),
-                    async_trait: None,
-                });
-            };
-            Ok(Self {
-                sync_trait: Some(sync_trait),
-                async_trait: if input.is_empty() {
-                    None
-                } else {
-                    Some(input.parse()?)
-                },
-            })
+            parse_in_order_sync_async(input, attrs)
         } else if input.peek(kw::async_trait) {
-            let mut async_trait: AsyncTrait = input.parse()?;
-            async_trait.attrs.extend(attrs);
-            let _: Token![,] = match async_trait
-                .generics
-                .where_clause
-                .as_mut()
-                .map(|where_clause| where_clause.predicates.pop_punct())
-                .flatten()
-            {
-                None if input.is_empty() => {
-                    return Ok(Self {
-                        sync_trait: None,
-                        async_trait: Some(async_trait),
-                    })
-                }
-                None => input.parse()?,
-                Some(comma_token) => comma_token,
-            };
-            Ok(Self {
-                async_trait: Some(async_trait),
-                sync_trait: if input.is_empty() {
-                    None
-                } else {
-                    Some(input.parse()?)
-                },
-            })
+            parse_in_order_async_sync(input, attrs)
         } else if !input.is_empty() || !attrs.is_empty() {
             Err(input.error(ERROR_PARSE_ARGS))
         } else {
-            Ok(Self {
-                sync_trait: None,
-                async_trait: None,
-            })
+            Ok(Self::default())
         }
     }
+}
+
+fn parse_in_order_sync_async(input: ParseStream, attrs: Vec<Attribute>) -> syn::Result<AsyncGenericArgs> {
+    let mut sync_trait: SyncTrait = input.parse()?;
+    sync_trait.attrs.extend(attrs);
+    if input.is_empty() {
+        return Ok(AsyncGenericArgs {
+            sync_trait: Some(sync_trait),
+            async_trait: None,
+        });
+    }
+
+    let _: Token![,] = input.parse()?;
+    if input.is_empty() {
+        return Ok(AsyncGenericArgs {
+            sync_trait: Some(sync_trait),
+            async_trait: None,
+        });
+    }
+
+    let mut async_trait: AsyncTrait = input.parse()?;
+    let _: Option<Token![,]> = match async_trait
+        .generics
+        .where_clause
+        .as_mut()
+        .and_then(|where_clause| where_clause.predicates.pop_punct())
+    {
+        Some(comma_token) => Some(comma_token),
+        None => {
+            let comma_token = input.parse()?;
+            if !input.is_empty() {
+                return Err(input.error(ERROR_PARSE_ARGS));
+            }
+            comma_token
+        }
+    };
+
+    Ok(AsyncGenericArgs {
+        sync_trait: Some(sync_trait),
+        async_trait: Some(async_trait),
+    })
+}
+
+fn parse_in_order_async_sync(input: ParseStream, attrs: Vec<Attribute>) -> syn::Result<AsyncGenericArgs> {
+    let mut async_trait: AsyncTrait = input.parse()?;
+    async_trait.attrs.extend(attrs);
+    let _: Token![,] = match async_trait
+        .generics
+        .where_clause
+        .as_mut()
+        .and_then(|where_clause| where_clause.predicates.pop_punct())
+    {
+        None if input.is_empty() => {
+            return Ok(AsyncGenericArgs {
+                sync_trait: None,
+                async_trait: Some(async_trait),
+            })
+        }
+        None => input.parse()?,
+        Some(comma_token) => comma_token,
+    };
+
+    if input.is_empty() {
+        return Ok(AsyncGenericArgs {
+            async_trait: Some(async_trait),
+            sync_trait: None,
+        });
+    }
+
+    let sync_trait = input.parse()?;
+    let _: Option<Token![,]> = input.parse()?;
+    if !input.is_empty() {
+        return Err(input.error(ERROR_PARSE_ARGS));
+    }
+
+    Ok(AsyncGenericArgs {
+        sync_trait: Some(sync_trait),
+        async_trait: Some(async_trait),
+    })
 }
 
 impl Parse for SyncTrait {
@@ -229,8 +264,6 @@ pub trait TraitPart: Clone + ToTokens {
 
     fn update_ident(&mut self, f: impl FnOnce(Ident) -> Ident);
 
-    fn items(&self) -> &[Self::Item];
-
     fn items_mut(&mut self) -> &mut Vec<Self::Item>;
 
     fn set_items(&mut self, items: Vec<Self::Item>);
@@ -254,7 +287,6 @@ pub trait TraitPart: Clone + ToTokens {
 pub trait TraitPartItem {
     type ItemFn: Clone + HasAttributes + HasAsyncness + Into<TargetItemFn> + TryFrom<TargetItemFn>;
 
-    fn as_item_fn(&self) -> Option<&Self::ItemFn>;
     fn to_item_fn(self) -> Result<Self::ItemFn, Self>
     where
         Self: Sized;
@@ -312,15 +344,15 @@ where
                                 acc.push(From::from(trait_item_fn));
                                 return Ok(acc);
                             };
-                            let async_signature = match take_async_signature(&mut trait_item_fn, i)
-                            {
-                                Ok(result) => result?,
-                                Err(_) => {
-                                    // Not remove to let the second pass handle the error
-                                    acc.push(T::Item::from(trait_item_fn));
-                                    return Ok(acc);
-                                }
-                            };
+                            let async_generic_args =
+                                match take_async_generic_args(&mut trait_item_fn, i) {
+                                    Ok(result) => result?,
+                                    Err(_) => {
+                                        // Not remove to let the second pass handle the error
+                                        acc.push(T::Item::from(trait_item_fn));
+                                        return Ok(acc);
+                                    }
+                                };
                             let (
                                 AsyncGenericFn {
                                     target: sync_fn, ..
@@ -330,7 +362,7 @@ where
                                 },
                             ) = super::r#fn::split::<false>(
                                 trait_item_fn.clone(),
-                                r#fn::AsyncGenericArgs(async_signature),
+                                async_generic_args,
                             );
                             acc.extend([sync_fn, async_fn].map(|f| {
                                 T::Item::from(
@@ -382,8 +414,8 @@ where
                                 }
                                 return Ok(acc);
                             };
-                            let _async_signature: Option<AsyncSignature> =
-                                match take_async_signature(&mut trait_item_fn, i) {
+                            let async_generic_args: r#fn::AsyncGenericArgs =
+                                match take_async_generic_args(&mut trait_item_fn, i) {
                                     Ok(result) => result?,
                                     Err(_) => {
                                         // Not remove to let the second pass handle the error
@@ -397,6 +429,7 @@ where
                                 target: sync_fn, ..
                             } = AsyncGenericFn::<r#fn::kind::Sync, state::Initial>::new(
                                 trait_item_fn.into(),
+                                async_generic_args.sync_signature,
                             )
                             .rewrite();
 
@@ -448,23 +481,23 @@ where
                                 }
                                 return Ok(acc);
                             };
-                            let async_signature = match take_async_signature(&mut trait_item_fn, i)
-                            {
-                                Ok(result) => result?,
-                                Err(_) => {
-                                    // Not remove to let the second pass handle the error
-                                    if trait_item_fn.is_async() {
-                                        acc.push(T::Item::from(trait_item_fn));
+                            let async_generic_args =
+                                match take_async_generic_args(&mut trait_item_fn, i) {
+                                    Ok(result) => result?,
+                                    Err(_) => {
+                                        // Not remove to let the second pass handle the error
+                                        if trait_item_fn.is_async() {
+                                            acc.push(T::Item::from(trait_item_fn));
+                                        }
+                                        return Ok(acc);
                                     }
-                                    return Ok(acc);
-                                }
-                            };
+                                };
 
                             let AsyncGenericFn {
                                 target: async_fn, ..
                             } = AsyncGenericFn::<r#fn::kind::Async<true>, state::Initial>::new(
                                 trait_item_fn.into(),
-                                async_signature,
+                                async_generic_args.async_signature,
                             )
                             .rewrite();
 
@@ -509,21 +542,21 @@ fn path_is_async_generic(path: &Path) -> bool {
     })
 }
 
-fn take_async_signature<T: HasAttributes>(
+fn take_async_generic_args<T: HasAttributes>(
     trait_item_fn: &mut T,
     i: usize,
-) -> Result<syn::Result<Option<AsyncSignature>>, ()> {
+) -> Result<syn::Result<r#fn::AsyncGenericArgs>, ()> {
     match &trait_item_fn.attrs()[i].meta {
         Meta::Path(_) => {
             trait_item_fn.remove_attr(i).meta;
-            Ok(Ok(None))
+            Ok(Ok(r#fn::AsyncGenericArgs::default()))
         }
         Meta::List(_) => {
             let meta = trait_item_fn.remove_attr(i).meta;
             let Meta::List(MetaList { tokens: args, .. }) = meta else {
                 unreachable!();
             };
-            Ok(parse2(args).map(Some))
+            Ok(parse2(args))
         }
         Meta::NameValue(_) => Err(()),
     }

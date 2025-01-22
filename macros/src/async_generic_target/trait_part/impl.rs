@@ -23,24 +23,12 @@ impl TraitPart for ItemImpl {
         }
     }
 
-    fn items(&self) -> &[Self::Item] {
-        &self.items
-    }
-
     fn items_mut(&mut self) -> &mut Vec<Self::Item> {
         &mut self.items
     }
 
     fn set_items(&mut self, items: Vec<Self::Item>) {
         self.items = items;
-    }
-
-    fn try_update_items<F, E>(&mut self, f: F) -> Result<(), E>
-    where
-        F: FnOnce(Vec<Self::Item>) -> Result<Vec<Self::Item>, E>,
-    {
-        self.items = f(std::mem::take(&mut self.items))?;
-        Ok(())
     }
 
     fn extend_attrs(&mut self, iter: impl IntoIterator<Item = Attribute>) {
@@ -62,13 +50,6 @@ impl TraitPart for ItemImpl {
 
 impl TraitPartItem for ImplItem {
     type ItemFn = ImplItemFn;
-
-    fn as_item_fn(&self) -> Option<&Self::ItemFn> {
-        match self {
-            ImplItem::Fn(item_fn) => Some(item_fn),
-            _ => None,
-        }
-    }
 
     fn to_item_fn(self) -> Result<Self::ItemFn, Self>
     where
