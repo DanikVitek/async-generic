@@ -524,7 +524,7 @@ where
 
                             let Some(i) = suitable_attr else {
                                 if trait_item_fn.is_async()
-                                    || self.kind.0.options.is_some_and(|options| options.copy_sync)
+                                    || matches!(self.kind.0.options, Some(options) if options.copy_sync)
                                 {
                                     acc.push(T::Item::from(trait_item_fn));
                                 }
