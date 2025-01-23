@@ -3,10 +3,12 @@ use core::marker::PhantomData;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::ToTokens;
 use syn::{
+    parenthesized,
     parse::{discouraged::Speculative, Parse, ParseStream},
     parse2,
     punctuated::Punctuated,
     spanned::Spanned,
+    token::Paren,
     AttrStyle, Attribute, Error, Generics, ItemImpl, ItemTrait, Meta, MetaList, Path, Token,
     TypeParamBound,
 };
@@ -23,8 +25,11 @@ mod kind;
 pub mod r#trait;
 
 pub mod kw {
-    syn::custom_keyword!(async_trait);
-    syn::custom_keyword!(sync_trait);
+    use syn::custom_keyword;
+
+    custom_keyword!(async_trait);
+    custom_keyword!(sync_trait);
+    custom_keyword!(copy_sync);
 }
 
 const ERROR_PARSE_ARGS: &str =
@@ -80,14 +85,18 @@ pub struct AsyncGenericArgs {
 
 pub struct SyncTrait {
     attrs: Vec<Attribute>,
-    _sync_trait_token: kw::sync_trait,
 }
 
 pub struct AsyncTrait {
     attrs: Vec<Attribute>,
-    _async_trait_token: kw::async_trait,
+    options: Option<Options>,
     generics: Generics,
     supertraits: Option<(Token![:], Punctuated<TypeParamBound, Token![+]>)>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Options {
+    copy_sync: bool,
 }
 
 impl Parse for AsyncGenericArgs {
@@ -105,7 +114,10 @@ impl Parse for AsyncGenericArgs {
     }
 }
 
-fn parse_in_order_sync_async(input: ParseStream, attrs: Vec<Attribute>) -> syn::Result<AsyncGenericArgs> {
+fn parse_in_order_sync_async(
+    input: ParseStream,
+    attrs: Vec<Attribute>,
+) -> syn::Result<AsyncGenericArgs> {
     let mut sync_trait: SyncTrait = input.parse()?;
     sync_trait.attrs.extend(attrs);
     if input.is_empty() {
@@ -146,7 +158,10 @@ fn parse_in_order_sync_async(input: ParseStream, attrs: Vec<Attribute>) -> syn::
     })
 }
 
-fn parse_in_order_async_sync(input: ParseStream, attrs: Vec<Attribute>) -> syn::Result<AsyncGenericArgs> {
+fn parse_in_order_async_sync(
+    input: ParseStream,
+    attrs: Vec<Attribute>,
+) -> syn::Result<AsyncGenericArgs> {
     let mut async_trait: AsyncTrait = input.parse()?;
     async_trait.attrs.extend(attrs);
     let _: Token![,] = match async_trait
@@ -187,22 +202,26 @@ fn parse_in_order_async_sync(input: ParseStream, attrs: Vec<Attribute>) -> syn::
 impl Parse for SyncTrait {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = parse_attrs(input)?;
-        let sync_trait_token = input
+        let _: kw::sync_trait = input
             .parse()
             .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
-        Ok(Self {
-            attrs,
-            _sync_trait_token: sync_trait_token,
-        })
+        Ok(Self { attrs })
     }
 }
 
 impl Parse for AsyncTrait {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = parse_attrs(input)?;
-        let async_trait_token = input
+        let _: kw::async_trait = input
             .parse()
             .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
+
+        let options = if input.peek(Paren) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
+
         let mut generics: Generics = input.parse()?;
 
         let supertraits = if input.peek(Token![:]) {
@@ -218,10 +237,38 @@ impl Parse for AsyncTrait {
 
         Ok(Self {
             attrs,
-            _async_trait_token: async_trait_token,
+            options,
             generics,
             supertraits,
         })
+    }
+}
+
+impl Parse for Options {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let content;
+        let _ = parenthesized!(content in input);
+        let options = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?;
+        let idents = options.iter().collect::<Vec<_>>();
+        if idents.is_empty() {
+            return Ok(Self::default());
+        }
+        if idents.len() > 1 {
+            return Err(Error::new(
+                options.span(),
+                "expected at most one option, found multiple",
+            ));
+        }
+        let copy_sync;
+        if idents.iter().any(|ident| **ident == "copy_sync") {
+            copy_sync = true;
+        } else {
+            return Err(Error::new(
+                idents[0].span(),
+                "expected `copy_sync` as the only option",
+            ));
+        }
+        Ok(Self { copy_sync })
     }
 }
 
@@ -476,7 +523,9 @@ where
                                 trait_item_fn.attrs().iter().position(attr_is_suitable);
 
                             let Some(i) = suitable_attr else {
-                                if trait_item_fn.is_async() {
+                                if trait_item_fn.is_async()
+                                    || self.kind.0.options.is_some_and(|options| options.copy_sync)
+                                {
                                     acc.push(T::Item::from(trait_item_fn));
                                 }
                                 return Ok(acc);

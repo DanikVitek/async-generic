@@ -549,3 +549,18 @@ impl<A> ToTokens for AsyncGenericFn<A, state::Final> {
         self.target.to_tokens(tokens);
     }
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     
+//     #[test]
+//     fn test_expand() {
+//         let target_fn: ItemFn = parse_quote! {
+//             #[async_generic]
+//             fn foo() {}
+//         };
+//         
+//         let split = expand()
+//     }
+// }
