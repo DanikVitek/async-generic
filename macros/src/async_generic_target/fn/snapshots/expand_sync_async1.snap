@@ -1,0 +1,10 @@
+---
+source: macros/src/async_generic_target/fn/mod.rs
+expression: formatted1
+---
+/// # Common docs
+/// # Sync Docs
+fn foo() {}
+/// # Common docs
+/// # Async Docs
+async fn foo_async() {}

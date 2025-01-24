@@ -12,6 +12,9 @@ use crate::async_generic_target::{
 mod async_generic_target;
 mod util;
 
+#[cfg(test)]
+pub(crate) mod test_helpers;
+
 #[proc_macro_attribute]
 pub fn async_generic(args: TokenStream, input: TokenStream) -> TokenStream {
     let target_item: TargetItem = parse_macro_input!(input as TargetItem);

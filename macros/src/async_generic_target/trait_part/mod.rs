@@ -319,7 +319,7 @@ pub trait TraitPart: Clone + ToTokens {
     where
         F: FnOnce(Vec<Self::Item>) -> Result<Vec<Self::Item>, E>,
     {
-        let items = f(std::mem::take(self.items_mut()))?;
+        let items = f(core::mem::take(self.items_mut()))?;
         self.set_items(items);
         Ok(())
     }
@@ -561,13 +561,13 @@ where
         })?;
 
         self.target
-            .extend_attrs(std::mem::take(&mut self.kind.0.attrs));
+            .extend_attrs(core::mem::take(&mut self.kind.0.attrs));
         if let Some((colon_token, supertraits)) = self.kind.0.supertraits.take() {
             self.target.set_colon_token(colon_token);
             self.target.set_supertraits(supertraits);
         }
         self.target
-            .set_generics(std::mem::take(&mut self.kind.0.generics));
+            .set_generics(core::mem::take(&mut self.kind.0.generics));
         self.target
             .update_ident(|ident| Ident::new(&format!("{ident}Async"), ident.span()));
 

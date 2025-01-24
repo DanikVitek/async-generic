@@ -550,17 +550,120 @@ impl<A> ToTokens for AsyncGenericFn<A, state::Final> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     
-//     #[test]
-//     fn test_expand() {
-//         let target_fn: ItemFn = parse_quote! {
-//             #[async_generic]
-//             fn foo() {}
-//         };
-//         
-//         let split = expand()
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_str_eq;
+
+    use super::*;
+    use crate::test_helpers::local_assert_snapshot;
+
+    fn format_expand(target_fn: ItemFn, args: AsyncGenericArgs) -> String {
+        let expanded = expand(target_fn, args);
+        prettyplease::unparse(&parse_quote!(#expanded))
+    }
+
+    macro_rules! test_expand {
+        ($target_fn:expr, $args:expr) => {
+            test_expand!($target_fn, $args => formatted);
+        };
+        ($target_fn:expr, $args:expr => $formatted: ident) => {
+            let $formatted = format_expand($target_fn, $args);
+            local_assert_snapshot!($formatted);
+        };
+    }
+
+    #[test]
+    fn test_expand_nop() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {}
+        };
+        let args: AsyncGenericArgs = parse_quote!();
+
+        test_expand!(target_fn.clone(), args => formatted_default);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_signature,
+        };
+
+        test_expand!(target_fn.clone(), args => formatted_sync);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature,
+        };
+
+        test_expand!(target_fn.clone(), args => formatted_async);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_signature, async_signature,
+        };
+
+        test_expand!(target_fn.clone(), args => formatted_sync_async);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature, sync_signature,
+        };
+
+        let formatted_async_sync = format_expand(target_fn, args);
+
+        assert_str_eq!(formatted_default, formatted_sync);
+        assert_str_eq!(formatted_default, formatted_async);
+
+        assert_str_eq!(formatted_default, formatted_sync_async);
+        assert_str_eq!(formatted_sync_async, formatted_async_sync);
+    }
+
+    #[test]
+    fn test_expand_sync1() {
+        let target_fn: ItemFn = parse_quote! {
+            /// # Common docs
+            fn foo() {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            /// # Sync Docs
+            sync_signature,
+        };
+
+        test_expand!(target_fn, args);
+    }
+
+    #[test]
+    fn test_expand_async1() {
+        let target_fn: ItemFn = parse_quote! {
+            /// # Common docs
+            fn foo() {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            /// # Async Docs
+            async_signature,
+        };
+
+        test_expand!(target_fn, args);
+    }
+
+    #[test]
+    fn test_expand_sync_async1() {
+        let target_fn: ItemFn = parse_quote! {
+            /// # Common docs
+            fn foo() {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            /// # Sync Docs
+            sync_signature,
+            /// # Async Docs
+            async_signature,
+        };
+
+        test_expand!(target_fn.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            /// # Async Docs
+            async_signature,
+            /// # Sync Docs
+            sync_signature,
+        };
+
+        let formatted2 = format_expand(target_fn, args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+}

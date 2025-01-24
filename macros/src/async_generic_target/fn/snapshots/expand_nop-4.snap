@@ -1,0 +1,6 @@
+---
+source: macros/src/async_generic_target/fn/mod.rs
+expression: formatted_sync_async
+---
+fn foo() {}
+async fn foo_async() {}

@@ -102,7 +102,7 @@ impl<const PRESERVE_IDENT: bool> Kind for Async<PRESERVE_IDENT> {
         if let Some(alt_output) = self.0.as_mut().and_then(|sig| {
             sig.params.as_mut().map(|params| {
                 let mut default = ReturnType::Default;
-                std::mem::swap(&mut params.output, &mut default);
+                core::mem::swap(&mut params.output, &mut default);
                 default
             })
         }) {
