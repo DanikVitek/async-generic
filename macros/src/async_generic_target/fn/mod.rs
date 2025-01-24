@@ -9,9 +9,9 @@ use syn::{
     punctuated::Punctuated,
     token::{Brace, Bracket},
     visit_mut::{self, VisitMut},
-    Attribute, Block, Error, Expr, ExprAsync, ExprBlock, ExprCall, FnArg, Generics, ImplItemFn,
-    ItemFn, Pat, PatType, PatWild, Receiver, ReturnType, Signature, Stmt, Token, TraitItemFn,
-    Variadic,
+    Attribute, Block, Error, Expr, ExprAsync, ExprBlock, ExprCall, ExprTuple, FnArg, Generics,
+    ImplItemFn, ItemFn, Pat, PatType, PatWild, Receiver, ReturnType, Signature, Stmt, Token,
+    TraitItemFn, Variadic,
 };
 
 use self::kind::Kind;
@@ -290,10 +290,7 @@ impl From<(AsyncSignature, SyncSignature)> for AsyncGenericArgs {
     }
 }
 
-fn parse_in_order<A, B>(
-    input: ParseStream,
-    attrs: Vec<Attribute>,
-) -> syn::Result<AsyncGenericArgs>
+fn parse_in_order<A, B>(input: ParseStream, attrs: Vec<Attribute>) -> syn::Result<AsyncGenericArgs>
 where
     A: Parse + CanSetAttrs,
     B: Parse + CanSetAttrs,
@@ -701,7 +698,16 @@ where
             return;
         };
         let then_branch = expr_if.then_branch.clone();
-        let else_branch = expr_if.else_branch.as_ref().map(|eb| *eb.1.clone());
+        let else_branch = expr_if.else_branch.as_mut().map(|(_, eb)| {
+            core::mem::replace(
+                &mut **eb,
+                Expr::Tuple(ExprTuple {
+                    attrs: vec![],
+                    paren_token: Default::default(),
+                    elems: Default::default(),
+                }),
+            )
+        });
 
         self.rewrite_block(node, predicate, then_branch, else_branch);
     }
@@ -977,7 +983,7 @@ mod tests {
 
         assert_str_eq!(formatted1, formatted2);
     }
-    
+
     #[test]
     fn test_expand_async_interface_kind_async_fn() {
         let target_fn: ItemFn = parse_quote! {
@@ -988,29 +994,29 @@ mod tests {
         };
 
         test_expand!(target_fn.clone(), args => formatted1);
-        
+
         let args: AsyncGenericArgs = parse_quote! {
             async_signature[async_fn]
         };
-        
+
         let formatted2 = format_expand(target_fn.clone(), args);
-        
+
         assert_str_eq!(formatted1, formatted2);
-        
+
         let args: AsyncGenericArgs = parse_quote! {
             async_signature[async_fn]()
         };
-        
+
         let formatted2 = format_expand(target_fn.clone(), args);
-        
+
         assert_str_eq!(formatted1, formatted2);
-        
+
         let args: AsyncGenericArgs = parse_quote! {
             async_signature[async_fn]();
         };
-        
+
         let formatted2 = format_expand(target_fn, args);
-        
+
         assert_str_eq!(formatted1, formatted2);
     }
 
@@ -1032,7 +1038,7 @@ mod tests {
         let formatted2 = format_expand(target_fn.clone(), args);
 
         assert_str_eq!(formatted1, formatted2);
-        
+
         let args: AsyncGenericArgs = parse_quote! {
             async_signature[impl_fut]()
         };
@@ -1040,7 +1046,7 @@ mod tests {
         let formatted2 = format_expand(target_fn.clone(), args);
 
         assert_str_eq!(formatted1, formatted2);
-        
+
         let args: AsyncGenericArgs = parse_quote! {
             async_signature[impl_fut]();
         };
@@ -1068,7 +1074,7 @@ mod tests {
         let formatted2 = format_expand(target_fn.clone(), args);
 
         assert_str_eq!(formatted1, formatted2);
-        
+
         let args: AsyncGenericArgs = parse_quote! {
             async_signature[pin_box_fut]()
         };
@@ -1076,7 +1082,7 @@ mod tests {
         let formatted2 = format_expand(target_fn.clone(), args);
 
         assert_str_eq!(formatted1, formatted2);
-        
+
         let args: AsyncGenericArgs = parse_quote! {
             async_signature[pin_box_fut]();
         };
@@ -1084,5 +1090,37 @@ mod tests {
         let formatted2 = format_expand(target_fn, args);
 
         assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_sync_condition() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {
+                if _sync {
+                    0
+                } else {
+                    1
+                }
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {};
+
+        test_expand!(target_fn, args);
+    }
+
+    #[test]
+    fn test_expand_async_condition() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {
+                if _async {
+                    0
+                } else {
+                    1
+                }
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {};
+
+        test_expand!(target_fn, args);
     }
 }

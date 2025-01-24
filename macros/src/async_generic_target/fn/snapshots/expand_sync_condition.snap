@@ -1,0 +1,10 @@
+---
+source: macros/src/async_generic_target/fn/mod.rs
+expression: formatted
+---
+fn foo() {
+    { 0 }
+}
+async fn foo_async() {
+    { 1 }
+}
