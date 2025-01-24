@@ -90,7 +90,7 @@ impl<const PRESERVE_IDENT: bool> Kind for Async<PRESERVE_IDENT> {
         if let Some(alt_inputs) = self.0.as_mut().and_then(|sig| {
             sig.params
                 .as_mut()
-                .map(|params| std::mem::take(&mut params.inputs))
+                .map(|params| core::mem::take(&mut params.inputs))
         }) {
             alt_inputs
         } else {
