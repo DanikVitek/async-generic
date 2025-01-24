@@ -215,9 +215,9 @@ impl Parse for AsyncGenericArgs {
         let attrs = parse_attrs(input)?;
         let lookahead = input.lookahead1();
         if lookahead.peek(kw::sync_signature) {
-            parse_in_order_sync_async(input, attrs)
+            parse_in_order::<SyncSignature, AsyncSignature>(input, attrs)
         } else if lookahead.peek(kw::async_signature) {
-            parse_in_order_async_sync(input, attrs)
+            parse_in_order::<AsyncSignature, SyncSignature>(input, attrs)
         } else if !input.is_empty() || !attrs.is_empty() {
             Err(lookahead.error())
         } else {
@@ -226,70 +226,81 @@ impl Parse for AsyncGenericArgs {
     }
 }
 
-fn parse_in_order_sync_async(
-    input: ParseStream,
-    attrs: Vec<Attribute>,
-) -> syn::Result<AsyncGenericArgs> {
-    let mut sync_signature: SyncSignature = input.parse()?;
-    sync_signature.attrs = attrs;
-
-    let lookahead = input.lookahead1();
-    if !lookahead.peek(Token![;]) {
-        if lookahead.peek(End) {
-            return Ok(AsyncGenericArgs {
-                sync_signature: Some(sync_signature),
-                async_signature: None,
-            });
-        }
-        return Err(lookahead.error());
-    }
-    let _: Token![;] = input.parse()?;
-
-    if input.is_empty() {
-        return Ok(AsyncGenericArgs {
-            sync_signature: Some(sync_signature),
-            async_signature: None,
-        });
-    }
-
-    let async_signature = input.parse()?;
-
-    let lookahead = input.lookahead1();
-    if !lookahead.peek(Token![;]) && !lookahead.peek(End) {
-        return Err(lookahead.error());
-    }
-    let _: Option<Token![;]> = input.parse()?;
-
-    Ok(AsyncGenericArgs {
-        sync_signature: Some(sync_signature),
-        async_signature: Some(async_signature),
-    })
+trait CanSetAttrs {
+    fn set_attrs(&mut self, attrs: Vec<Attribute>);
 }
 
-fn parse_in_order_async_sync(
+impl CanSetAttrs for SyncSignature {
+    fn set_attrs(&mut self, attrs: Vec<Attribute>) {
+        self.attrs = attrs;
+    }
+}
+
+impl CanSetAttrs for AsyncSignature {
+    fn set_attrs(&mut self, attrs: Vec<Attribute>) {
+        self.attrs = attrs;
+    }
+}
+
+impl From<SyncSignature> for AsyncGenericArgs {
+    fn from(sync_signature: SyncSignature) -> Self {
+        Self {
+            sync_signature: Some(sync_signature),
+            async_signature: None,
+        }
+    }
+}
+
+impl From<AsyncSignature> for AsyncGenericArgs {
+    fn from(async_signature: AsyncSignature) -> Self {
+        Self {
+            sync_signature: None,
+            async_signature: Some(async_signature),
+        }
+    }
+}
+
+impl From<(SyncSignature, AsyncSignature)> for AsyncGenericArgs {
+    fn from((sync_signature, async_signature): (SyncSignature, AsyncSignature)) -> Self {
+        Self {
+            sync_signature: Some(sync_signature),
+            async_signature: Some(async_signature),
+        }
+    }
+}
+
+impl From<(AsyncSignature, SyncSignature)> for AsyncGenericArgs {
+    fn from((async_signature, sync_signature): (AsyncSignature, SyncSignature)) -> Self {
+        Self {
+            sync_signature: Some(sync_signature),
+            async_signature: Some(async_signature),
+        }
+    }
+}
+
+fn parse_in_order<A, B>(
     input: ParseStream,
     attrs: Vec<Attribute>,
-) -> syn::Result<AsyncGenericArgs> {
-    let mut async_signature: AsyncSignature = input.parse()?;
-    async_signature.attrs = attrs;
+) -> syn::Result<AsyncGenericArgs>
+where
+    A: Parse + CanSetAttrs,
+    B: Parse + CanSetAttrs,
+    AsyncGenericArgs: From<A> + From<B> + From<(A, B)>,
+{
+    let mut async_signature: A = input.parse()?;
+    async_signature.set_attrs(attrs);
 
     let lookahead = input.lookahead1();
     if !lookahead.peek(Token![;]) {
         if lookahead.peek(End) {
-            return Ok(AsyncGenericArgs {
-                async_signature: Some(async_signature),
-                sync_signature: None,
-            });
+            return Ok(AsyncGenericArgs::from(async_signature));
         }
         return Err(lookahead.error());
     }
     let _: Token![;] = input.parse()?;
 
     if input.is_empty() {
-        return Ok(AsyncGenericArgs {
-            async_signature: Some(async_signature),
-            sync_signature: None,
-        });
+        return Ok(AsyncGenericArgs::from(async_signature));
     }
 
     let sync_signature = input.parse()?;
@@ -300,10 +311,7 @@ fn parse_in_order_async_sync(
     }
     let _: Option<Token![;]> = input.parse()?;
 
-    Ok(AsyncGenericArgs {
-        sync_signature: Some(sync_signature),
-        async_signature: Some(async_signature),
-    })
+    Ok(AsyncGenericArgs::from((async_signature, sync_signature)))
 }
 
 impl Parse for SyncSignature {
