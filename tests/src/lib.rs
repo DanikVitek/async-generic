@@ -16,4 +16,5 @@ fn tests() {
     t.compile_fail("src/tests/fail/no-async-fn.rs");
     t.compile_fail("src/tests/fail/no-macro-args.rs");
     t.compile_fail("src/tests/fail/no-struct.rs");
+    t.compile_fail("src/tests/fail/unattained-attributes-trait.rs");
 }

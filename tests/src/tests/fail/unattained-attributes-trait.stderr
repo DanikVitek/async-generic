@@ -1,0 +1,23 @@
+error: unexpected end of input, expected `sync_trait` or `async_trait`
+ --> src/tests/fail/unattained-attributes-trait.rs:4:1
+  |
+4 | / #[async_generic(
+5 | |     #[async_trait]
+6 | | )]
+  | |__^
+  |
+  = note: this error originates in the attribute macro `async_generic` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: attributes must be placed on `sync_trait` and/or `async_trait`
+ --> src/tests/fail/unattained-attributes-trait.rs:5:5
+  |
+5 |     #[async_trait]
+  |     ^
+
+warning: unused import: `async_trait::async_trait`
+ --> src/tests/fail/unattained-attributes-trait.rs:2:5
+  |
+2 | use async_trait::async_trait;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default

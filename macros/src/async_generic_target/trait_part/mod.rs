@@ -4,7 +4,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::ToTokens;
 use syn::{
     parenthesized,
-    parse::{discouraged::Speculative, Parse, ParseStream},
+    parse::{discouraged::Speculative, End, Parse, ParseStream},
     parse2,
     punctuated::Punctuated,
     spanned::Spanned,
@@ -34,6 +34,8 @@ pub mod kw {
 
 const ERROR_PARSE_ARGS: &str =
     "`async_generic` on `trait` or `impl` can only take an `sync_trait` or `async_trait` argument";
+const ERROR_UNATTAINED_ATTRIBUTES: &str =
+    "attributes must be placed on `sync_trait` and/or `async_trait`";
 
 pub fn expand(target: TargetTraitPart, args: AsyncGenericArgs) -> TokenStream2 {
     fn expand<T: TraitPart>(
@@ -101,14 +103,17 @@ pub struct Options {
 
 impl Parse for AsyncGenericArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let fork1 = input.fork();
         let attrs = parse_attrs(input)?;
         let lookahead = input.lookahead1();
         if lookahead.peek(kw::sync_trait) {
             parse_in_order_sync_async(input, attrs)
         } else if lookahead.peek(kw::async_trait) {
             parse_in_order_async_sync(input, attrs)
-        } else if !input.is_empty() || !attrs.is_empty() {
-            Err(lookahead.error())
+        } else if !lookahead.peek(End) || !attrs.is_empty() {
+            let mut err = lookahead.error();
+            err.extend(fork1.error(ERROR_UNATTAINED_ATTRIBUTES));
+            Err(err)
         } else {
             Ok(Self::default())
         }
