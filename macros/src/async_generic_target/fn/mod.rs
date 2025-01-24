@@ -54,13 +54,17 @@ pub fn split<const PRESERVE_IDENT: bool>(
     split(target_fn.into(), args.sync_signature, args.async_signature)
 }
 
-pub fn expand(target_fn: TargetItemFn, args: AsyncGenericArgs) -> TokenStream2 {
-    let (sync_fn, async_fn) = split::<false>(target_fn, args);
+#[inline]
+pub fn expand(target_fn: impl Into<TargetItemFn>, args: AsyncGenericArgs) -> TokenStream2 {
+    fn expand(target_fn: TargetItemFn, args: AsyncGenericArgs) -> TokenStream2 {
+        let (sync_fn, async_fn) = split::<false>(target_fn, args);
 
-    quote! {
-        #sync_fn
-        #async_fn
+        quote! {
+            #sync_fn
+            #async_fn
+        }
     }
+    expand(target_fn.into(), args)
 }
 
 #[derive(Default)]
@@ -585,19 +589,19 @@ mod tests {
             sync_signature,
         };
 
-        test_expand!(target_fn.clone(), args => formatted_sync);
+        let formatted_sync = format_expand(target_fn.clone(), args);
 
         let args: AsyncGenericArgs = parse_quote! {
             async_signature,
         };
 
-        test_expand!(target_fn.clone(), args => formatted_async);
+        let formatted_async = format_expand(target_fn.clone(), args);
 
         let args: AsyncGenericArgs = parse_quote! {
             sync_signature, async_signature,
         };
 
-        test_expand!(target_fn.clone(), args => formatted_sync_async);
+        let formatted_sync_async = format_expand(target_fn.clone(), args);
 
         let args: AsyncGenericArgs = parse_quote! {
             async_signature, sync_signature,
@@ -607,9 +611,8 @@ mod tests {
 
         assert_str_eq!(formatted_default, formatted_sync);
         assert_str_eq!(formatted_default, formatted_async);
-
         assert_str_eq!(formatted_default, formatted_sync_async);
-        assert_str_eq!(formatted_sync_async, formatted_async_sync);
+        assert_str_eq!(formatted_default, formatted_async_sync);
     }
 
     #[test]
