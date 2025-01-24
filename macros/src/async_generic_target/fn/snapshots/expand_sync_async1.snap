@@ -4,7 +4,10 @@ expression: formatted1
 ---
 /// # Common docs
 /// # Sync Docs
-fn foo() {}
+fn foo<T>() {}
 /// # Common docs
 /// # Async Docs
-async fn foo_async() {}
+async fn foo_async<T>() -> impl Future<Output = ()> + Send
+where
+    T: Send,
+{}

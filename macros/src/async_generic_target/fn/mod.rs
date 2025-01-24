@@ -5,6 +5,7 @@ use quote::{quote, ToTokens};
 use syn::{
     parenthesized,
     parse::{discouraged::Speculative, Parse, ParseStream},
+    parse::{discouraged::Speculative, End, Parse, ParseStream},
     parse_quote,
     punctuated::Punctuated,
     visit_mut::{self, VisitMut},
@@ -212,12 +213,13 @@ impl ToTokens for TargetItemFn {
 impl Parse for AsyncGenericArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = parse_attrs(input)?;
-        if input.peek(kw::sync_signature) {
+        let lookahead = input.lookahead1();
+        if lookahead.peek(kw::sync_signature) {
             parse_in_order_sync_async(input, attrs)
-        } else if input.peek(kw::async_signature) {
+        } else if lookahead.peek(kw::async_signature) {
             parse_in_order_async_sync(input, attrs)
         } else if !input.is_empty() || !attrs.is_empty() {
-            Err(input.error(ERROR_PARSE_ARGS))
+            Err(lookahead.error())
         } else {
             Ok(Self::default())
         }
@@ -229,7 +231,20 @@ fn parse_in_order_sync_async(
     attrs: Vec<Attribute>,
 ) -> syn::Result<AsyncGenericArgs> {
     let mut sync_signature: SyncSignature = input.parse()?;
-    sync_signature.attrs.extend(attrs);
+    sync_signature.attrs = attrs;
+
+    let lookahead = input.lookahead1();
+    if !lookahead.peek(Token![;]) {
+        if lookahead.peek(End) {
+            return Ok(AsyncGenericArgs {
+                sync_signature: Some(sync_signature),
+                async_signature: None,
+            });
+        }
+        return Err(lookahead.error());
+    }
+    let _: Token![;] = input.parse()?;
+
     if input.is_empty() {
         return Ok(AsyncGenericArgs {
             sync_signature: Some(sync_signature),
@@ -237,28 +252,13 @@ fn parse_in_order_sync_async(
         });
     }
 
-    let _: Token![,] = input.parse()?;
-    if input.is_empty() {
-        return Ok(AsyncGenericArgs {
-            sync_signature: Some(sync_signature),
-            async_signature: None,
-        });
-    }
+    let async_signature = input.parse()?;
 
-    let mut async_signature: AsyncSignature = input.parse()?;
-    let _: Option<Token![,]> = match async_signature.params.as_mut().and_then(|params| {
-        params
-            .generics
-            .where_clause
-            .as_mut()
-            .and_then(|where_clause| where_clause.predicates.pop_punct())
-    }) {
-        Some(comma_token) => Some(comma_token),
-        None => input.parse()?,
-    };
-    if !input.is_empty() {
-        return Err(input.error(ERROR_PARSE_ARGS));
+    let lookahead = input.lookahead1();
+    if !lookahead.peek(Token![;]) && !lookahead.peek(End) {
+        return Err(lookahead.error());
     }
+    let _: Option<Token![;]> = input.parse()?;
 
     Ok(AsyncGenericArgs {
         sync_signature: Some(sync_signature),
@@ -271,23 +271,19 @@ fn parse_in_order_async_sync(
     attrs: Vec<Attribute>,
 ) -> syn::Result<AsyncGenericArgs> {
     let mut async_signature: AsyncSignature = input.parse()?;
-    async_signature.attrs.extend(attrs);
-    let _: Token![,] = match async_signature.params.as_mut().and_then(|params| {
-        params
-            .generics
-            .where_clause
-            .as_mut()
-            .and_then(|where_clause| where_clause.predicates.pop_punct())
-    }) {
-        None if input.is_empty() => {
+    async_signature.attrs = attrs;
+
+    let lookahead = input.lookahead1();
+    if !lookahead.peek(Token![;]) {
+        if lookahead.peek(End) {
             return Ok(AsyncGenericArgs {
-                sync_signature: None,
                 async_signature: Some(async_signature),
-            })
+                sync_signature: None,
+            });
         }
-        None => input.parse()?,
-        Some(comma_token) => comma_token,
-    };
+        return Err(lookahead.error());
+    }
+    let _: Token![;] = input.parse()?;
 
     if input.is_empty() {
         return Ok(AsyncGenericArgs {
@@ -297,10 +293,12 @@ fn parse_in_order_async_sync(
     }
 
     let sync_signature = input.parse()?;
-    let _: Option<Token![,]> = input.parse()?;
-    if !input.is_empty() {
-        return Err(input.error(ERROR_PARSE_ARGS));
+
+    let lookahead = input.lookahead1();
+    if !lookahead.peek(Token![;]) && !lookahead.peek(End) {
+        return Err(lookahead.error());
     }
+    let _: Option<Token![;]> = input.parse()?;
 
     Ok(AsyncGenericArgs {
         sync_signature: Some(sync_signature),
@@ -329,7 +327,7 @@ impl Parse for AsyncSignature {
             .parse()
             .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
 
-        if input.is_empty() || input.peek(Token![,]) {
+        if input.is_empty() || input.peek(Token![;]) {
             return Ok(AsyncSignature {
                 attrs,
                 _async_signature_token: async_signature_token,
@@ -586,25 +584,25 @@ mod tests {
         test_expand!(target_fn.clone(), args => formatted_default);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_signature,
+            sync_signature;
         };
 
         let formatted_sync = format_expand(target_fn.clone(), args);
 
         let args: AsyncGenericArgs = parse_quote! {
-            async_signature,
+            async_signature;
         };
 
         let formatted_async = format_expand(target_fn.clone(), args);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_signature, async_signature,
+            sync_signature; async_signature;
         };
 
         let formatted_sync_async = format_expand(target_fn.clone(), args);
 
         let args: AsyncGenericArgs = parse_quote! {
-            async_signature, sync_signature,
+            async_signature; sync_signature;
         };
 
         let formatted_async_sync = format_expand(target_fn, args);
@@ -616,6 +614,74 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_nop_with_ret_ty() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() -> String {}
+        };
+        let args: AsyncGenericArgs = parse_quote!();
+
+        test_expand!(target_fn.clone(), args => formatted_default);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_signature
+        };
+
+        let formatted_sync = format_expand(target_fn.clone(), args);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_signature;
+        };
+
+        let formatted_sync_comma = format_expand(target_fn.clone(), args);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature
+        };
+
+        let formatted_async = format_expand(target_fn.clone(), args);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature;
+        };
+
+        let formatted_async_comma = format_expand(target_fn.clone(), args);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_signature; async_signature
+        };
+
+        let formatted_sync_async = format_expand(target_fn.clone(), args);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature; sync_signature
+        };
+
+        let formatted_async_sync = format_expand(target_fn.clone(), args);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_signature; async_signature;
+        };
+
+        let formatted_sync_async_comma = format_expand(target_fn.clone(), args);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature; sync_signature;
+        };
+
+        let formatted_async_sync_comma = format_expand(target_fn, args);
+
+        assert_str_eq!(formatted_default, formatted_sync);
+        assert_str_eq!(formatted_default, formatted_async);
+        assert_str_eq!(formatted_default, formatted_sync_async);
+        assert_str_eq!(formatted_default, formatted_async_sync);
+
+        assert_str_eq!(formatted_sync, formatted_sync_comma);
+        assert_str_eq!(formatted_async, formatted_async_comma);
+        assert_str_eq!(formatted_sync_async, formatted_sync_async_comma);
+        assert_str_eq!(formatted_async_sync, formatted_async_sync_comma);
+    }
+
+    #[test]
     fn test_expand_sync1() {
         let target_fn: ItemFn = parse_quote! {
             /// # Common docs
@@ -623,21 +689,57 @@ mod tests {
         };
         let args: AsyncGenericArgs = parse_quote! {
             /// # Sync Docs
-            sync_signature,
+            sync_signature;
         };
 
         test_expand!(target_fn, args);
     }
 
     #[test]
-    fn test_expand_async1() {
+    fn test_expand_async_default() {
         let target_fn: ItemFn = parse_quote! {
             /// # Common docs
             fn foo() {}
         };
         let args: AsyncGenericArgs = parse_quote! {
             /// # Async Docs
-            async_signature,
+            async_signature;
+        };
+
+        test_expand!(target_fn, args);
+    }
+
+    #[test]
+    fn test_expand_async_change_signature1() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() -> String {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature();
+        };
+
+        test_expand!(target_fn, args);
+    }
+
+    #[test]
+    fn test_expand_async_change_signature2() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() -> String {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature() -> StringAsync;
+        };
+
+        test_expand!(target_fn, args);
+    }
+
+    #[test]
+    fn test_expand_async_change_signature3() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo<R: Read>(reader: &mut R) -> String {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature<R: AsyncRead>(reader: &mut R) -> String;
         };
 
         test_expand!(target_fn, args);
@@ -647,22 +749,22 @@ mod tests {
     fn test_expand_sync_async1() {
         let target_fn: ItemFn = parse_quote! {
             /// # Common docs
-            fn foo() {}
+            fn foo<T>() {}
         };
         let args: AsyncGenericArgs = parse_quote! {
             /// # Sync Docs
-            sync_signature,
+            sync_signature;
             /// # Async Docs
-            async_signature,
+            async_signature<T>() -> impl Future<Output=()> + Send where T: Send;
         };
 
         test_expand!(target_fn.clone(), args => formatted1);
 
         let args: AsyncGenericArgs = parse_quote! {
             /// # Async Docs
-            async_signature,
+            async_signature<T>() -> impl Future<Output=()> + Send where T: Send;
             /// # Sync Docs
-            sync_signature,
+            sync_signature;
         };
 
         let formatted2 = format_expand(target_fn, args);

@@ -102,12 +102,13 @@ pub struct Options {
 impl Parse for AsyncGenericArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = parse_attrs(input)?;
-        if input.peek(kw::sync_trait) {
+        let lookahead = input.lookahead1();
+        if lookahead.peek(kw::sync_trait) {
             parse_in_order_sync_async(input, attrs)
-        } else if input.peek(kw::async_trait) {
+        } else if lookahead.peek(kw::async_trait) {
             parse_in_order_async_sync(input, attrs)
         } else if !input.is_empty() || !attrs.is_empty() {
-            Err(input.error(ERROR_PARSE_ARGS))
+            Err(lookahead.error())
         } else {
             Ok(Self::default())
         }

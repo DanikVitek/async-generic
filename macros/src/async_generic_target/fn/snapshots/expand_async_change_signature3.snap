@@ -1,0 +1,6 @@
+---
+source: macros/src/async_generic_target/fn/mod.rs
+expression: formatted
+---
+fn foo<R: Read>(reader: &mut R) -> String {}
+async fn foo_async<R: AsyncRead>(reader: &mut R) -> String {}
