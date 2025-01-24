@@ -1,16 +1,17 @@
 use std::marker::PhantomData;
 
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{
-    parenthesized,
-    parse::{discouraged::Speculative, Parse, ParseStream},
+    bracketed, parenthesized,
     parse::{discouraged::Speculative, End, Parse, ParseStream},
     parse_quote,
     punctuated::Punctuated,
+    token::{Brace, Bracket},
     visit_mut::{self, VisitMut},
-    Attribute, Block, Error, Expr, ExprBlock, FnArg, Generics, ImplItemFn, ItemFn, ReturnType,
-    Signature, Token, TraitItemFn,
+    Attribute, Block, Error, Expr, ExprAsync, ExprBlock, ExprCall, FnArg, Generics, ImplItemFn,
+    ItemFn, Pat, PatType, PatWild, Receiver, ReturnType, Signature, Stmt, Token, TraitItemFn,
+    Variadic,
 };
 
 use self::kind::Kind;
@@ -23,6 +24,9 @@ pub mod kw {
 
     custom_keyword!(sync_signature);
     custom_keyword!(async_signature);
+    custom_keyword!(async_fn);
+    custom_keyword!(pin_box_fut);
+    custom_keyword!(impl_fut);
 }
 
 const ERROR_PARSE_ARGS: &str =
@@ -76,18 +80,26 @@ pub struct AsyncGenericArgs {
 
 pub struct SyncSignature {
     attrs: Vec<Attribute>,
-    _sync_signature_token: kw::sync_signature,
 }
 
 pub struct AsyncSignature {
     attrs: Vec<Attribute>,
-    _async_signature_token: kw::async_signature,
+    interface_kind: InterfaceKind,
     params: Option<AsyncSignatureParams>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub enum InterfaceKind {
+    #[default]
+    AsyncFn,
+    PinBoxFut,
+    ImplFut,
 }
 
 struct AsyncSignatureParams {
     generics: Generics,
     inputs: Punctuated<FnArg, Token![,]>,
+    variadic: Option<Variadic>,
     output: ReturnType,
 }
 
@@ -317,37 +329,56 @@ where
 impl Parse for SyncSignature {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = parse_attrs(input)?;
-        let sync_signature_token = input
+        let _: kw::sync_signature = input
             .parse()
             .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
 
-        Ok(SyncSignature {
-            attrs,
-            _sync_signature_token: sync_signature_token,
-        })
+        Ok(SyncSignature { attrs })
     }
 }
 
 impl Parse for AsyncSignature {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = parse_attrs(input)?;
-        let async_signature_token = input
+        let _: kw::async_signature = input
             .parse()
             .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
+        let interface_kind = if input.peek(Bracket) {
+            let content;
+            bracketed!(content in input);
+            content.parse()?
+        } else {
+            InterfaceKind::default()
+        };
 
         if input.is_empty() || input.peek(Token![;]) {
             return Ok(AsyncSignature {
                 attrs,
-                _async_signature_token: async_signature_token,
+                interface_kind,
                 params: None,
             });
         }
 
         Ok(AsyncSignature {
             attrs,
-            _async_signature_token: async_signature_token,
+            interface_kind,
             params: Some(input.parse()?),
         })
+    }
+}
+
+impl Parse for InterfaceKind {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let lookahead = input.lookahead1();
+        if lookahead.peek(kw::async_fn) {
+            input.parse::<kw::async_fn>().map(|_| Self::AsyncFn)
+        } else if lookahead.peek(kw::pin_box_fut) {
+            input.parse::<kw::pin_box_fut>().map(|_| Self::PinBoxFut)
+        } else if lookahead.peek(kw::impl_fut) {
+            input.parse::<kw::impl_fut>().map(|_| Self::ImplFut)
+        } else {
+            Err(lookahead.error())
+        }
     }
 }
 
@@ -357,22 +388,142 @@ impl Parse for AsyncSignatureParams {
 
         let content;
         parenthesized!(content in input);
-        let inputs = Punctuated::parse_terminated(&content)?;
+        let (inputs, variadic) = parse_fn_args(&content)?;
 
         let output = input.parse()?;
-
-        generics.where_clause = if input.peek(Token![where]) {
-            Some(input.parse()?)
-        } else {
-            None
-        };
+        generics.where_clause = input.parse()?;
 
         Ok(Self {
             generics,
             inputs,
+            variadic,
             output,
         })
     }
+}
+
+fn parse_fn_args(
+    input: ParseStream,
+) -> syn::Result<(Punctuated<FnArg, Token![,]>, Option<Variadic>)> {
+    let mut args = Punctuated::new();
+    let mut variadic = None;
+    let mut has_receiver = false;
+
+    while !input.is_empty() {
+        let attrs = input.call(Attribute::parse_outer)?;
+
+        if let Some(dots) = input.parse::<Option<Token![...]>>()? {
+            variadic = Some(Variadic {
+                attrs,
+                pat: None,
+                dots,
+                comma: if input.is_empty() {
+                    None
+                } else {
+                    Some(input.parse()?)
+                },
+            });
+            break;
+        }
+
+        let allow_variadic = true;
+        let arg = match parse_fn_arg_or_variadic(input, attrs, allow_variadic)? {
+            FnArgOrVariadic::FnArg(arg) => arg,
+            FnArgOrVariadic::Variadic(arg) => {
+                variadic = Some(Variadic {
+                    comma: if input.is_empty() {
+                        None
+                    } else {
+                        Some(input.parse()?)
+                    },
+                    ..arg
+                });
+                break;
+            }
+        };
+
+        match &arg {
+            FnArg::Receiver(receiver) if has_receiver => {
+                return Err(Error::new(
+                    receiver.self_token.span,
+                    "unexpected second method receiver",
+                ));
+            }
+            FnArg::Receiver(receiver) if !args.is_empty() => {
+                return Err(Error::new(
+                    receiver.self_token.span,
+                    "unexpected method receiver",
+                ));
+            }
+            FnArg::Receiver(_) => has_receiver = true,
+            FnArg::Typed(_) => {}
+        }
+        args.push_value(arg);
+
+        if input.is_empty() {
+            break;
+        }
+
+        let comma: Token![,] = input.parse()?;
+        args.push_punct(comma);
+    }
+
+    Ok((args, variadic))
+}
+
+fn parse_fn_arg_or_variadic(
+    input: ParseStream,
+    attrs: Vec<Attribute>,
+    allow_variadic: bool,
+) -> syn::Result<FnArgOrVariadic> {
+    let ahead = input.fork();
+    if let Ok(mut receiver) = ahead.parse::<Receiver>() {
+        input.advance_to(&ahead);
+        receiver.attrs = attrs;
+        return Ok(FnArgOrVariadic::FnArg(FnArg::Receiver(receiver)));
+    }
+
+    // Hack to parse pre-2018 syntax in
+    // test/ui/rfc-2565-param-attrs/param-attrs-pretty.rs
+    // because the rest of the test case is valuable.
+    if input.peek(syn::Ident) && input.peek2(Token![<]) {
+        let span = input.fork().parse::<Ident>()?.span();
+        return Ok(FnArgOrVariadic::FnArg(FnArg::Typed(PatType {
+            attrs,
+            pat: Box::new(Pat::Wild(PatWild {
+                attrs: Vec::new(),
+                underscore_token: Token![_](span),
+            })),
+            colon_token: Token![:](span),
+            ty: input.parse()?,
+        })));
+    }
+
+    let pat = Box::new(Pat::parse_single(input)?);
+    let colon_token: Token![:] = input.parse()?;
+
+    if allow_variadic {
+        if let Some(dots) = input.parse::<Option<Token![...]>>()? {
+            return Ok(FnArgOrVariadic::Variadic(Variadic {
+                attrs,
+                pat: Some((pat, colon_token)),
+                dots,
+                comma: None,
+            }));
+        }
+    }
+
+    Ok(FnArgOrVariadic::FnArg(FnArg::Typed(PatType {
+        attrs,
+        pat,
+        colon_token,
+        ty: input.parse()?,
+    })))
+}
+
+enum FnArgOrVariadic {
+    FnArg(FnArg),
+    Variadic(Variadic),
 }
 
 impl AsyncGenericFn<kind::Sync, state::Initial> {
@@ -396,18 +547,69 @@ impl<const PRESERVE_IDENT: bool> AsyncGenericFn<kind::Async<PRESERVE_IDENT>, sta
 }
 
 trait CanTransformBlock {
-    fn transform_block(initial: Block) -> Block;
+    fn transform_block(&self, initial: Block) -> Block;
 }
 
-impl<A: CanCompareToPredicate> CanTransformBlock for A {
-    fn transform_block(mut initial: Block) -> Block {
+impl<A: CanCompareToPredicate + CanSurround> CanTransformBlock for A {
+    fn transform_block(&self, mut initial: Block) -> Block {
         IfAsyncRewriter::<A>(PhantomData).visit_block_mut(&mut initial);
+        self.surround(&mut initial);
         initial
+    }
+}
+
+pub trait CanSurround {
+    fn surround(&self, block: &mut Block);
+}
+
+impl CanSurround for kind::Sync {
+    fn surround(&self, _block: &mut Block) {}
+}
+
+impl<const PRESERVE_IDENT: bool> CanSurround for kind::Async<PRESERVE_IDENT> {
+    fn surround(&self, block: &mut Block) {
+        if let Some(sig) = self.0.as_ref() {
+            fn surround_with_async(stmts: Vec<Stmt>) -> ExprAsync {
+                ExprAsync {
+                    attrs: vec![],
+                    async_token: Default::default(),
+                    capture: Some(Default::default()),
+                    block: Block {
+                        brace_token: Brace(Span::call_site()),
+                        stmts,
+                    },
+                }
+            }
+            match sig.interface_kind {
+                InterfaceKind::AsyncFn => {}
+                InterfaceKind::PinBoxFut => {
+                    let stmts = core::mem::take(&mut block.stmts);
+                    block.stmts = vec![Stmt::Expr(
+                        Expr::Call(ExprCall {
+                            attrs: vec![],
+                            func: parse_quote! { Box::pin },
+                            paren_token: Default::default(),
+                            args: {
+                                let mut p = Punctuated::new();
+                                p.push_value(Expr::Async(surround_with_async(stmts)));
+                                p
+                            },
+                        }),
+                        None,
+                    )];
+                }
+                InterfaceKind::ImplFut => {
+                    let stmts = core::mem::take(&mut block.stmts);
+                    block.stmts = vec![Stmt::Expr(Expr::Async(surround_with_async(stmts)), None)];
+                }
+            }
+        }
     }
 }
 
 trait CanRewriteBlock {
     fn rewrite_block(
+        self,
         node: &mut Expr,
         predicate: AsyncPredicate,
         then_branch: Block,
@@ -420,7 +622,15 @@ pub enum AsyncPredicate {
     Async,
 }
 
-struct IfAsyncRewriter<S>(PhantomData<S>);
+struct IfAsyncRewriter<A>(PhantomData<A>);
+
+impl<A> Clone for IfAsyncRewriter<A> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+
+impl<A> Copy for IfAsyncRewriter<A> {}
 
 pub trait CanCompareToPredicate {
     fn cmp(predicate: AsyncPredicate) -> bool;
@@ -443,6 +653,7 @@ where
     A: CanCompareToPredicate,
 {
     fn rewrite_block(
+        self,
         node: &mut Expr,
         predicate: AsyncPredicate,
         then_branch: Block,
@@ -492,56 +703,43 @@ where
         let then_branch = expr_if.then_branch.clone();
         let else_branch = expr_if.else_branch.as_ref().map(|eb| *eb.1.clone());
 
-        Self::rewrite_block(node, predicate, then_branch, else_branch);
+        self.rewrite_block(node, predicate, then_branch, else_branch);
     }
 }
 
 impl<A> AsyncGenericFn<A, state::Initial>
 where
-    A: Kind + CanCompareToPredicate,
+    A: Kind + CanCompareToPredicate + CanSurround,
 {
     pub fn rewrite(mut self) -> AsyncGenericFn<A, state::Final> {
+        let mut rewrite_sig = |sig: Signature| Signature {
+            constness: A::transform_constness(sig.constness),
+            asyncness: self.kind.asyncness(),
+            ident: A::transform_ident(sig.ident),
+            generics: self.kind.transform_generics(sig.generics),
+            inputs: self.kind.transform_inputs(sig.inputs),
+            variadic: self.kind.transform_variadic(sig.variadic),
+            output: self.kind.transform_output(sig.output),
+            ..sig
+        };
+
         let target = match self.target {
             TargetItemFn::FreeStanding(f) => TargetItemFn::FreeStanding(ItemFn {
+                sig: rewrite_sig(f.sig),
                 attrs: self.kind.extend_attrs(f.attrs),
-                sig: Signature {
-                    constness: A::transform_constness(f.sig.constness),
-                    asyncness: A::asyncness(),
-                    ident: A::transform_ident(f.sig.ident),
-                    generics: self.kind.transform_generics(f.sig.generics),
-                    inputs: self.kind.transform_inputs(f.sig.inputs),
-                    output: self.kind.transform_output(f.sig.output),
-                    ..f.sig
-                },
-                block: Box::new(A::transform_block(*f.block)),
+                block: Box::new(self.kind.transform_block(*f.block)),
                 ..f
             }),
             TargetItemFn::Trait(f) => TargetItemFn::Trait(TraitItemFn {
+                sig: rewrite_sig(f.sig),
                 attrs: self.kind.extend_attrs(f.attrs),
-                sig: Signature {
-                    constness: A::transform_constness(f.sig.constness),
-                    asyncness: A::asyncness(),
-                    ident: A::transform_ident(f.sig.ident),
-                    generics: self.kind.transform_generics(f.sig.generics),
-                    inputs: self.kind.transform_inputs(f.sig.inputs),
-                    output: self.kind.transform_output(f.sig.output),
-                    ..f.sig
-                },
-                default: f.default.map(A::transform_block),
+                default: f.default.map(|block| self.kind.transform_block(block)),
                 ..f
             }),
             TargetItemFn::Impl(f) => TargetItemFn::Impl(ImplItemFn {
+                sig: rewrite_sig(f.sig),
                 attrs: self.kind.extend_attrs(f.attrs),
-                sig: Signature {
-                    constness: A::transform_constness(f.sig.constness),
-                    asyncness: A::asyncness(),
-                    ident: A::transform_ident(f.sig.ident),
-                    generics: self.kind.transform_generics(f.sig.generics),
-                    inputs: self.kind.transform_inputs(f.sig.inputs),
-                    output: self.kind.transform_output(f.sig.output),
-                    ..f.sig
-                },
-                block: A::transform_block(f.block),
+                block: self.kind.transform_block(f.block),
                 ..f
             }),
         };
@@ -773,6 +971,114 @@ mod tests {
             async_signature<T>() -> impl Future<Output=()> + Send where T: Send;
             /// # Sync Docs
             sync_signature;
+        };
+
+        let formatted2 = format_expand(target_fn, args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+    
+    #[test]
+    fn test_expand_async_interface_kind_async_fn() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[async_fn];
+        };
+
+        test_expand!(target_fn.clone(), args => formatted1);
+        
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[async_fn]
+        };
+        
+        let formatted2 = format_expand(target_fn.clone(), args);
+        
+        assert_str_eq!(formatted1, formatted2);
+        
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[async_fn]()
+        };
+        
+        let formatted2 = format_expand(target_fn.clone(), args);
+        
+        assert_str_eq!(formatted1, formatted2);
+        
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[async_fn]();
+        };
+        
+        let formatted2 = format_expand(target_fn, args);
+        
+        assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_async_interface_kind_impl_fut() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[impl_fut];
+        };
+
+        test_expand!(target_fn.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[impl_fut]
+        };
+
+        let formatted2 = format_expand(target_fn.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+        
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[impl_fut]()
+        };
+
+        let formatted2 = format_expand(target_fn.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+        
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[impl_fut]();
+        };
+
+        let formatted2 = format_expand(target_fn, args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_async_interface_kind_pin_box_fut() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_fut];
+        };
+
+        test_expand!(target_fn.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_fut]
+        };
+
+        let formatted2 = format_expand(target_fn.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+        
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_fut]()
+        };
+
+        let formatted2 = format_expand(target_fn.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+        
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_fut]();
         };
 
         let formatted2 = format_expand(target_fn, args);

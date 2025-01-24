@@ -1,7 +1,8 @@
-use proc_macro2::{Ident, Span};
-use syn::{punctuated::Punctuated, Attribute, FnArg, Generics, ReturnType, Token};
+use proc_macro2::Ident;
+use syn::{punctuated::Punctuated, Attribute, FnArg, Generics, ReturnType, Token, Variadic};
 
 use super::{AsyncSignature, SyncSignature};
+use crate::async_generic_target::r#fn::InterfaceKind;
 
 pub struct Sync(pub(super) Option<SyncSignature>);
 
@@ -12,7 +13,7 @@ pub trait Kind {
         constness
     }
 
-    fn asyncness() -> Option<Token![async]>;
+    fn asyncness(&self) -> Option<Token![async]>;
 
     fn extend_attrs(&mut self, attrs: Vec<Attribute>) -> Vec<Attribute>;
 
@@ -31,13 +32,20 @@ pub trait Kind {
         inputs
     }
 
+    fn transform_variadic(
+        &mut self,
+        variadic: Option<Variadic>,
+    ) -> Option<Variadic> {
+        variadic
+    }
+
     fn transform_output(&mut self, output: ReturnType) -> ReturnType {
         output
     }
 }
 
 impl Kind for Sync {
-    fn asyncness() -> Option<Token![async]> {
+    fn asyncness(&self) -> Option<Token![async]> {
         None
     }
 
@@ -52,12 +60,19 @@ impl<const PRESERVE_IDENT: bool> Kind for Async<PRESERVE_IDENT> {
         None // TODO: retutn `constness` when `const async fn` is stabilized
     }
 
-    fn asyncness() -> Option<Token![async]> {
-        Some(Token![async](Span::call_site()))
+    fn asyncness(&self) -> Option<Token![async]> {
+        matches!(
+            self.0,
+            None | Some(AsyncSignature {
+                interface_kind: InterfaceKind::AsyncFn,
+                ..
+            })
+        )
+        .then(<Token![async]>::default)
     }
 
     fn extend_attrs(&mut self, mut attrs: Vec<Attribute>) -> Vec<Attribute> {
-        if let Some(alt_attrs) = self.0.as_mut().map(|sig| std::mem::take(&mut sig.attrs)) {
+        if let Some(alt_attrs) = self.0.as_mut().map(|sig| core::mem::take(&mut sig.attrs)) {
             attrs.extend(alt_attrs);
         }
         attrs
@@ -75,7 +90,7 @@ impl<const PRESERVE_IDENT: bool> Kind for Async<PRESERVE_IDENT> {
         if let Some(alt_generics) = self.0.as_mut().and_then(|sig| {
             sig.params
                 .as_mut()
-                .map(|params| std::mem::take(&mut params.generics))
+                .map(|params| core::mem::take(&mut params.generics))
         }) {
             alt_generics
         } else {
@@ -95,6 +110,21 @@ impl<const PRESERVE_IDENT: bool> Kind for Async<PRESERVE_IDENT> {
             alt_inputs
         } else {
             inputs
+        }
+    }
+
+    fn transform_variadic(
+        &mut self,
+        variadic: Option<Variadic>,
+    ) -> Option<Variadic> {
+        if let Some(alt_variadic) = self.0.as_mut().and_then(|sig| {
+            sig.params
+                .as_mut()
+                .map(|params| params.variadic.take())
+        }) {
+            alt_variadic
+        } else {
+            variadic
         }
     }
 
