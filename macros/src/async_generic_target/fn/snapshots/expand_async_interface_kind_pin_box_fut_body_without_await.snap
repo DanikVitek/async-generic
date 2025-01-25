@@ -1,0 +1,16 @@
+---
+source: macros/src/async_generic_target/fn/mod.rs
+expression: formatted
+---
+fn foo() {
+    {
+        1;
+    }
+}
+fn foo_async() {
+    Box::pin({
+        {
+            0;
+        }
+    })
+}

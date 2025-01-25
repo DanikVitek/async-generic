@@ -1,17 +1,19 @@
 use std::marker::PhantomData;
 
-use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
+use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{
     bracketed, parenthesized,
     parse::{discouraged::Speculative, End, Parse, ParseStream},
     parse_quote,
     punctuated::Punctuated,
-    token::{Brace, Bracket},
+    token::{Brace, Bracket, Paren},
+    visit,
+    visit::Visit,
     visit_mut::{self, VisitMut},
-    Attribute, Block, Error, Expr, ExprAsync, ExprBlock, ExprCall, ExprTuple, FnArg, Generics,
-    ImplItemFn, ItemFn, Pat, PatType, PatWild, Receiver, ReturnType, Signature, Stmt, Token,
-    TraitItemFn, Variadic,
+    Attribute, Block, Error, Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprTuple, FnArg,
+    Generics, ImplItemFn, Item, ItemFn, Pat, PatType, PatWild, Receiver, ReturnType,
+    Signature, Stmt, Token, TraitItemFn, Variadic,
 };
 
 use self::kind::Kind;
@@ -566,17 +568,60 @@ impl CanSurround for kind::Sync {
 impl<const PRESERVE_IDENT: bool> CanSurround for kind::Async<PRESERVE_IDENT> {
     fn surround(&self, block: &mut Block) {
         if let Some(sig) = self.0.as_ref() {
-            fn surround_with_async(stmts: Vec<Stmt>) -> ExprAsync {
-                ExprAsync {
+            fn surround_with_async(stmts: Vec<Stmt>) -> Expr {
+                Expr::Async(ExprAsync {
                     attrs: vec![],
-                    async_token: Default::default(),
-                    capture: Some(Default::default()),
+                    async_token: <Token![async]>::default(),
+                    capture: Some(<Token![move]>::default()),
                     block: Block {
-                        brace_token: Brace(Span::call_site()),
+                        brace_token: Brace::default(),
                         stmts,
                     },
-                }
+                })
             }
+            fn surround_with_block(stmts: Vec<Stmt>) -> Expr {
+                Expr::Block(ExprBlock {
+                    attrs: vec![],
+                    label: None,
+                    block: Block {
+                        brace_token: Brace::default(),
+                        stmts,
+                    },
+                })
+            }
+
+            fn has_await_calls(stmts: &[Stmt]) -> bool {
+                struct AwaitCallFinder {
+                    found: bool,
+                }
+                impl<'ast> Visit<'ast> for AwaitCallFinder {
+                    fn visit_expr(&mut self, node: &'ast Expr) {
+                        if self.found {
+                            return;
+                        }
+                        visit::visit_expr(self, node);
+                    }
+
+                    fn visit_expr_await(&mut self, _: &'ast ExprAwait) {
+                        self.found = true;
+                    }
+
+                    fn visit_item(&mut self, _: &'ast Item) {
+                        return;
+                    }
+                }
+
+                let mut finder = AwaitCallFinder { found: false };
+                stmts.iter().any(|stmt| {
+                    finder.visit_stmt(stmt);
+                    finder.found
+                })
+            }
+
+            fn need_async(stmts: &[Stmt]) -> bool {
+                stmts.is_empty() || has_await_calls(stmts)
+            }
+
             match sig.interface_kind {
                 InterfaceKind::AsyncFn => {}
                 InterfaceKind::PinBoxFut => {
@@ -585,10 +630,14 @@ impl<const PRESERVE_IDENT: bool> CanSurround for kind::Async<PRESERVE_IDENT> {
                         Expr::Call(ExprCall {
                             attrs: vec![],
                             func: parse_quote! { Box::pin },
-                            paren_token: Default::default(),
+                            paren_token: Paren::default(),
                             args: {
                                 let mut p = Punctuated::new();
-                                p.push_value(Expr::Async(surround_with_async(stmts)));
+                                p.push_value(if need_async(&stmts) {
+                                    surround_with_async(stmts)
+                                } else {
+                                    surround_with_block(stmts)
+                                });
                                 p
                             },
                         }),
@@ -596,8 +645,10 @@ impl<const PRESERVE_IDENT: bool> CanSurround for kind::Async<PRESERVE_IDENT> {
                     )];
                 }
                 InterfaceKind::ImplFut => {
-                    let stmts = core::mem::take(&mut block.stmts);
-                    block.stmts = vec![Stmt::Expr(Expr::Async(surround_with_async(stmts)), None)];
+                    if need_async(&block.stmts) {
+                        let stmts = core::mem::take(&mut block.stmts);
+                        block.stmts = vec![Stmt::Expr(surround_with_async(stmts), None)];
+                    }
                 }
             }
         }
@@ -1021,7 +1072,7 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_async_interface_kind_impl_fut() {
+    fn test_expand_async_interface_kind_impl_fut_empty_body() {
         let target_fn: ItemFn = parse_quote! {
             fn foo() {}
         };
@@ -1057,7 +1108,43 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_async_interface_kind_pin_box_fut() {
+    fn test_expand_async_interface_kind_impl_fut_body_with_await() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {
+                if _async {
+                    0.await;
+                } else {
+                    1;
+                }
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[impl_fut];
+        };
+
+        test_expand!(target_fn.clone(), args);
+    }
+
+    #[test]
+    fn test_expand_async_interface_kind_impl_fut_body_without_await() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {
+                if _async {
+                    0;
+                } else {
+                    1;
+                }
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[impl_fut];
+        };
+
+        test_expand!(target_fn.clone(), args);
+    }
+
+    #[test]
+    fn test_expand_async_interface_kind_pin_box_fut_empty_body() {
         let target_fn: ItemFn = parse_quote! {
             fn foo() {}
         };
@@ -1090,6 +1177,42 @@ mod tests {
         let formatted2 = format_expand(target_fn, args);
 
         assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_async_interface_kind_pin_box_fut_body_with_await() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {
+                if _async {
+                    0.await;
+                } else {
+                    1;
+                }
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_fut];
+        };
+
+        test_expand!(target_fn.clone(), args);
+    }
+
+    #[test]
+    fn test_expand_async_interface_kind_pin_box_fut_body_without_await() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {
+                if _async {
+                    0;
+                } else {
+                    1;
+                }
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_fut];
+        };
+
+        test_expand!(target_fn.clone(), args);
     }
 
     #[test]
