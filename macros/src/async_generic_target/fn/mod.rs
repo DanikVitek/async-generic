@@ -11,9 +11,9 @@ use syn::{
     visit,
     visit::Visit,
     visit_mut::{self, VisitMut},
-    Attribute, Block, Error, Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprTuple, FnArg,
-    Generics, ImplItemFn, Item, ItemFn, Pat, PatType, PatWild, Receiver, ReturnType, Signature,
-    Stmt, Token, TraitItemFn, Variadic,
+    Attribute, Block, Error, Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprPath, ExprTuple,
+    FnArg, Generics, ImplItemFn, Item, ItemFn, Pat, PatType, PatWild, Receiver, ReturnType,
+    Signature, Stmt, Token, TraitItemFn, Variadic,
 };
 
 use self::kind::Kind;
@@ -26,9 +26,12 @@ pub mod kw {
 
     custom_keyword!(sync_signature);
     custom_keyword!(async_signature);
+
     custom_keyword!(async_fn);
     custom_keyword!(pin_box_fut);
     custom_keyword!(impl_fut);
+    custom_keyword!(pin_box_ready);
+    custom_keyword!(ready);
 }
 
 const ERROR_PARSE_ARGS: &str =
@@ -93,9 +96,22 @@ pub struct AsyncSignature {
 #[derive(Clone, Copy, Default)]
 pub enum InterfaceKind {
     #[default]
+    /// Makes the function `async`. Default behavior
     AsyncFn,
+    /// Makes the function non-`async`. Expands into the same as
+    /// [`InterfaceKind::ImplFut`], but then pin-boxed via [`Box::pin`]
     PinBoxFut,
+    /// Makes the function non-`async`. Expands into async block,
+    /// if there is at least one `.await` call, or if there is no statements.
+    /// Better use [`InterfaceKind::Ready`] for a unit, if there is no
+    /// statements.
     ImplFut,
+    /// Makes the function non-`async`. Expands into the same as
+    /// [`InterfaceKind::Ready`], but then pin-boxed via [`Box::pin`]
+    PinBoxReady,
+    /// Makes the function non-`async`. Expands into
+    /// [`core::future::ready({...})`](core::future::ready) call
+    Ready,
 }
 
 struct AsyncSignatureParams {
@@ -338,6 +354,12 @@ impl Parse for InterfaceKind {
             input.parse::<kw::pin_box_fut>().map(|_| Self::PinBoxFut)
         } else if lookahead.peek(kw::impl_fut) {
             input.parse::<kw::impl_fut>().map(|_| Self::ImplFut)
+        } else if lookahead.peek(kw::pin_box_ready) {
+            input
+                .parse::<kw::pin_box_ready>()
+                .map(|_| Self::PinBoxReady)
+        } else if lookahead.peek(kw::ready) {
+            input.parse::<kw::ready>().map(|_| Self::Ready)
         } else {
             Err(lookahead.error())
         }
@@ -364,6 +386,7 @@ impl Parse for AsyncSignatureParams {
     }
 }
 
+// copied from `syn`
 fn parse_fn_args(
     input: ParseStream,
 ) -> syn::Result<(Punctuated<FnArg, Token![,]>, Option<Variadic>)> {
@@ -433,6 +456,7 @@ fn parse_fn_args(
     Ok((args, variadic))
 }
 
+// copied from `syn`
 fn parse_fn_arg_or_variadic(
     input: ParseStream,
     attrs: Vec<Attribute>,
@@ -483,6 +507,7 @@ fn parse_fn_arg_or_variadic(
     })))
 }
 
+// copied from `syn`
 enum FnArgOrVariadic {
     FnArg(FnArg),
     Variadic(Variadic),
@@ -530,89 +555,128 @@ impl CanSurround for kind::Sync {
 
 impl<const PRESERVE_IDENT: bool> CanSurround for kind::Async<PRESERVE_IDENT> {
     fn surround(&self, block: &mut Block) {
-        if let Some(sig) = self.0.as_ref() {
-            fn surround_with_async(stmts: Vec<Stmt>) -> Expr {
-                Expr::Async(ExprAsync {
-                    attrs: vec![],
-                    async_token: <Token![async]>::default(),
-                    capture: Some(<Token![move]>::default()),
-                    block: Block {
-                        brace_token: Brace::default(),
-                        stmts,
-                    },
-                })
+        let Some(sig) = self.0.as_ref() else {
+            return;
+        };
+
+        fn surround_with_async(stmts: Vec<Stmt>) -> Expr {
+            Expr::Async(ExprAsync {
+                attrs: vec![],
+                async_token: <Token![async]>::default(),
+                capture: Some(<Token![move]>::default()),
+                block: Block {
+                    brace_token: Brace::default(),
+                    stmts,
+                },
+            })
+        }
+        fn surround_with_block(stmts: Vec<Stmt>) -> Expr {
+            Expr::Block(ExprBlock {
+                attrs: vec![],
+                label: None,
+                block: Block {
+                    brace_token: Brace::default(),
+                    stmts,
+                },
+            })
+        }
+
+        fn has_await_calls(stmts: &[Stmt]) -> bool {
+            struct AwaitCallFinder {
+                found: bool,
             }
-            fn surround_with_block(stmts: Vec<Stmt>) -> Expr {
-                Expr::Block(ExprBlock {
-                    attrs: vec![],
-                    label: None,
-                    block: Block {
-                        brace_token: Brace::default(),
-                        stmts,
-                    },
-                })
-            }
-
-            fn has_await_calls(stmts: &[Stmt]) -> bool {
-                struct AwaitCallFinder {
-                    found: bool,
-                }
-                impl<'ast> Visit<'ast> for AwaitCallFinder {
-                    fn visit_expr(&mut self, node: &'ast Expr) {
-                        if self.found {
-                            return;
-                        }
-                        visit::visit_expr(self, node);
-                    }
-
-                    fn visit_expr_await(&mut self, _: &'ast ExprAwait) {
-                        self.found = true;
-                    }
-
-                    fn visit_item(&mut self, _: &'ast Item) {
+            impl<'ast> Visit<'ast> for AwaitCallFinder {
+                fn visit_expr(&mut self, node: &'ast Expr) {
+                    if self.found {
                         return;
                     }
+                    visit::visit_expr(self, node);
                 }
 
-                let mut finder = AwaitCallFinder { found: false };
-                stmts.iter().any(|stmt| {
-                    finder.visit_stmt(stmt);
-                    finder.found
-                })
+                fn visit_expr_await(&mut self, _: &'ast ExprAwait) {
+                    self.found = true;
+                }
+
+                fn visit_item(&mut self, _: &'ast Item) {
+                    return;
+                }
             }
 
-            fn need_async(stmts: &[Stmt]) -> bool {
-                stmts.is_empty() || has_await_calls(stmts)
-            }
+            let mut finder = AwaitCallFinder { found: false };
+            stmts.iter().any(|stmt| {
+                finder.visit_stmt(stmt);
+                finder.found
+            })
+        }
 
-            match sig.interface_kind {
-                InterfaceKind::AsyncFn => {}
-                InterfaceKind::PinBoxFut => {
+        fn need_async(stmts: &[Stmt]) -> bool {
+            stmts.is_empty() || has_await_calls(stmts)
+        }
+
+        fn wrap_expr_in_call(func: ExprPath, expr: Expr) -> Expr {
+            Expr::Call(ExprCall {
+                attrs: vec![],
+                func: Box::new(Expr::Path(func)),
+                paren_token: Paren::default(),
+                args: {
+                    let mut p = Punctuated::new();
+                    p.push_value(expr);
+                    p
+                },
+            })
+        }
+
+        match sig.interface_kind {
+            InterfaceKind::AsyncFn => {}
+            InterfaceKind::PinBoxFut => {
+                let stmts = core::mem::take(&mut block.stmts);
+                block.stmts = vec![Stmt::Expr(
+                    wrap_expr_in_call(
+                        parse_quote! { Box::pin },
+                        if need_async(&stmts) {
+                            surround_with_async(stmts)
+                        } else {
+                            surround_with_block(stmts)
+                        },
+                    ),
+                    None,
+                )];
+            }
+            InterfaceKind::ImplFut => {
+                if need_async(&block.stmts) {
                     let stmts = core::mem::take(&mut block.stmts);
                     block.stmts = vec![Stmt::Expr(
-                        Expr::Call(ExprCall {
-                            attrs: vec![],
-                            func: parse_quote! { Box::pin },
-                            paren_token: Paren::default(),
-                            args: {
-                                let mut p = Punctuated::new();
-                                p.push_value(if need_async(&stmts) {
-                                    surround_with_async(stmts)
-                                } else {
-                                    surround_with_block(stmts)
-                                });
-                                p
-                            },
-                        }),
+                        if need_async(&stmts) {
+                            surround_with_async(stmts)
+                        } else {
+                            surround_with_block(stmts)
+                        },
                         None,
                     )];
                 }
-                InterfaceKind::ImplFut => {
-                    if need_async(&block.stmts) {
-                        let stmts = core::mem::take(&mut block.stmts);
-                        block.stmts = vec![Stmt::Expr(surround_with_async(stmts), None)];
-                    }
-                }
+            }
+            InterfaceKind::PinBoxReady => {
+                let stmts = core::mem::take(&mut block.stmts);
+                block.stmts = vec![Stmt::Expr(
+                    wrap_expr_in_call(
+                        parse_quote! { Box::pin },
+                        wrap_expr_in_call(
+                            parse_quote! { core::future::ready },
+                            surround_with_block(stmts),
+                        ),
+                    ),
+                    None,
+                )];
+            }
+            InterfaceKind::Ready => {
+                let stmts = core::mem::take(&mut block.stmts);
+                block.stmts = vec![Stmt::Expr(
+                    wrap_expr_in_call(
+                        parse_quote! { core::future::ready },
+                        surround_with_block(stmts),
+                    ),
+                    None,
+                )];
             }
         }
     }
@@ -1167,6 +1231,78 @@ mod tests {
         };
 
         test_expand!(target_fn.clone(), args);
+    }
+
+    #[test]
+    fn test_expand_async_interface_kind_ready() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[ready];
+        };
+
+        test_expand!(target_fn.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[ready]
+        };
+
+        let formatted2 = format_expand(target_fn.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[ready]()
+        };
+
+        let formatted2 = format_expand(target_fn.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[ready]();
+        };
+
+        let formatted2 = format_expand(target_fn, args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+    
+    #[test]
+    fn test_expand_async_interface_kind_pin_box_ready() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_ready];
+        };
+
+        test_expand!(target_fn.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_ready]
+        };
+
+        let formatted2 = format_expand(target_fn.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_ready]()
+        };
+
+        let formatted2 = format_expand(target_fn.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_signature[pin_box_ready]();
+        };
+
+        let formatted2 = format_expand(target_fn, args);
+
+        assert_str_eq!(formatted1, formatted2);
     }
 
     #[test]
