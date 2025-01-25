@@ -37,46 +37,62 @@ const ERROR_PARSE_ARGS: &str =
 const ERROR_UNATTAINED_ATTRIBUTES: &str =
     "attributes must be placed on `sync_trait` and/or `async_trait`";
 
-pub fn expand(target: TargetTraitPart, args: AsyncGenericArgs) -> TokenStream2 {
-    fn expand<T: TraitPart>(
-        target: T,
-        AsyncGenericArgs {
-            sync_trait,
-            async_trait,
-        }: AsyncGenericArgs,
-    ) -> TokenStream2 {
-        match async_trait {
-            None => AsyncGenericTraitPart::new(target, kind::Sync::<true>(sync_trait))
-                .rewrite()
-                .map(|res| res.into_token_stream())
-                .unwrap_or_else(|err| err.into_compile_error()),
-            Some(async_trait) => {
-                let sync_trait =
-                    AsyncGenericTraitPart::new(target.clone(), kind::Sync::<false>(sync_trait))
+#[inline]
+pub fn expand(target: impl Into<TargetTraitPart>, args: AsyncGenericArgs) -> TokenStream2 {
+    fn expand(target: TargetTraitPart, args: AsyncGenericArgs) -> TokenStream2 {
+        fn expand<T: TraitPart>(
+            target: T,
+            AsyncGenericArgs {
+                sync_trait,
+                async_trait,
+            }: AsyncGenericArgs,
+        ) -> TokenStream2 {
+            match async_trait {
+                None => AsyncGenericTraitPart::new(target, kind::Sync::<true>(sync_trait))
+                    .rewrite()
+                    .map(|res| res.into_token_stream())
+                    .unwrap_or_else(|err| err.into_compile_error()),
+                Some(async_trait) => {
+                    let sync_trait =
+                        AsyncGenericTraitPart::new(target.clone(), kind::Sync::<false>(sync_trait))
+                            .rewrite()
+                            .map(|res| res.into_token_stream())
+                            .unwrap_or_else(|err| err.into_compile_error());
+
+                    let async_trait = AsyncGenericTraitPart::new(target, kind::Async(async_trait))
                         .rewrite()
                         .map(|res| res.into_token_stream())
                         .unwrap_or_else(|err| err.into_compile_error());
 
-                let async_trait = AsyncGenericTraitPart::new(target, kind::Async(async_trait))
-                    .rewrite()
-                    .map(|res| res.into_token_stream())
-                    .unwrap_or_else(|err| err.into_compile_error());
-
-                let mut tt = TokenStream2::new();
-                tt.extend([sync_trait, async_trait]);
-                tt
+                    let mut tt = TokenStream2::new();
+                    tt.extend([sync_trait, async_trait]);
+                    tt
+                }
             }
         }
+        match target {
+            TargetTraitPart::Trait(item) => expand(item, args),
+            TargetTraitPart::Impl(item) => expand(item, args),
+        }
     }
-    match target {
-        TargetTraitPart::Trait(item) => expand(item, args),
-        TargetTraitPart::Impl(item) => expand(item, args),
-    }
+    expand(target.into(), args)
 }
 
 pub enum TargetTraitPart {
     Trait(ItemTrait),
     Impl(ItemImpl),
+}
+
+impl From<ItemTrait> for TargetTraitPart {
+    fn from(value: ItemTrait) -> Self {
+        Self::Trait(value)
+    }
+}
+
+impl From<ItemImpl> for TargetTraitPart {
+    fn from(value: ItemImpl) -> Self {
+        Self::Impl(value)
+    }
 }
 
 #[derive(Default)]
@@ -554,7 +570,7 @@ where
                                 trait_item_fn.into(),
                                 async_generic_args.async_signature,
                             )
-                            .rewrite();
+                                .rewrite();
 
                             acc.push(T::Item::from(
                                 <T::Item as TraitPartItem>::ItemFn::try_from(async_fn)
@@ -623,5 +639,173 @@ where
 {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
         self.target.to_tokens(tokens);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_str_eq;
+    use syn::parse_quote;
+
+    use super::*;
+    use crate::test_helpers::test_expand;
+
+    fn format_expand(target_fn: impl Into<TargetTraitPart>, args: AsyncGenericArgs) -> String {
+        let expanded = expand(target_fn, args);
+        prettyplease::unparse(&parse2(expanded).unwrap())
+    }
+
+    #[test]
+    fn test_expand_trait_nop() {
+        let target: ItemTrait = parse_quote! {
+            trait Foo {}
+        };
+        let args: AsyncGenericArgs = parse_quote!();
+
+        test_expand!(target.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_trait
+        };
+
+        let formatted2 = format_expand(target.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_trait,
+        };
+
+        let formatted2 = format_expand(target, args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_impl_nop() {
+        let target: ItemImpl = parse_quote! {
+            impl Foo for A {}
+        };
+        let args: AsyncGenericArgs = parse_quote!();
+
+        test_expand!(target.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_trait
+        };
+
+        let formatted2 = format_expand(target.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_trait,
+        };
+
+        let formatted2 = format_expand(target, args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_trait_split_async_generic_fns() {
+        let target: ItemTrait = parse_quote! {
+            trait Foo {
+                #[async_generic]
+                fn foo() -> u8;
+                #[async_generic]
+                fn bar() -> u8;
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote!();
+
+        test_expand!(target.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_trait
+        };
+
+        let formatted2 = format_expand(target.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_trait,
+        };
+
+        let formatted2 = format_expand(target, args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_impl_split_async_generic_fns() {
+        let target: ItemImpl = parse_quote! {
+            impl Foo for A {
+                #[async_generic]
+                fn foo() -> u8 {}
+                #[async_generic]
+                fn bar() -> u8 {}
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote!();
+
+        test_expand!(target.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_trait
+        };
+
+        let formatted2 = format_expand(target.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            sync_trait,
+        };
+
+        let formatted2 = format_expand(target, args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_trait_split_item_into_sync_and_async() {
+        let target: ItemTrait = parse_quote! {
+            trait Foo {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait
+        };
+
+        test_expand!(target.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait,
+        };
+
+        let formatted2 = format_expand(target, args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_impl_split_item_into_sync_and_async() {
+        let target: ItemImpl = parse_quote! {
+            impl Foo for A {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait
+        };
+
+        test_expand!(target.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait,
+        };
+
+        let formatted2 = format_expand(target, args);
+
+        assert_str_eq!(formatted1, formatted2);
     }
 }

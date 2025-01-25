@@ -1,0 +1,10 @@
+---
+source: macros/src/async_generic_target/trait_part/mod.rs
+expression: formatted1
+---
+impl Foo for A {
+    fn foo() -> u8 {}
+    async fn foo_async() -> u8 {}
+    fn bar() -> u8 {}
+    async fn bar_async() -> u8 {}
+}

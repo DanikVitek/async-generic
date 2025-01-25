@@ -12,8 +12,8 @@ use syn::{
     visit::Visit,
     visit_mut::{self, VisitMut},
     Attribute, Block, Error, Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprTuple, FnArg,
-    Generics, ImplItemFn, Item, ItemFn, Pat, PatType, PatWild, Receiver, ReturnType,
-    Signature, Stmt, Token, TraitItemFn, Variadic,
+    Generics, ImplItemFn, Item, ItemFn, Pat, PatType, PatWild, Receiver, ReturnType, Signature,
+    Stmt, Token, TraitItemFn, Variadic,
 };
 
 use self::kind::Kind;
@@ -818,23 +818,14 @@ impl<A> ToTokens for AsyncGenericFn<A, state::Final> {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_str_eq;
+    use syn::parse2;
 
     use super::*;
-    use crate::test_helpers::local_assert_snapshot;
+    use crate::test_helpers::test_expand;
 
-    fn format_expand(target_fn: ItemFn, args: AsyncGenericArgs) -> String {
+    fn format_expand(target_fn: impl Into<TargetItemFn>, args: AsyncGenericArgs) -> String {
         let expanded = expand(target_fn, args);
-        prettyplease::unparse(&parse_quote!(#expanded))
-    }
-
-    macro_rules! test_expand {
-        ($target_fn:expr, $args:expr) => {
-            test_expand!($target_fn, $args => formatted);
-        };
-        ($target_fn:expr, $args:expr => $formatted: ident) => {
-            let $formatted = format_expand($target_fn, $args);
-            local_assert_snapshot!($formatted);
-        };
+        prettyplease::unparse(&parse2(expanded).unwrap())
     }
 
     #[test]

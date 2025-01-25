@@ -6,4 +6,14 @@ macro_rules! local_assert_snapshot {
     };
 }
 
-pub(crate) use local_assert_snapshot;
+macro_rules! test_expand {
+    ($target_fn:expr, $args:expr) => {
+        test_expand!($target_fn, $args => formatted);
+    };
+    ($target_fn:expr, $args:expr => $formatted: ident) => {
+        let $formatted = format_expand($target_fn, $args);
+        $crate::test_helpers::local_assert_snapshot!($formatted);
+    };
+}
+
+pub(crate) use {local_assert_snapshot, test_expand};
