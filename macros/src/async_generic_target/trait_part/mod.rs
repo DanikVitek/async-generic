@@ -823,4 +823,50 @@ mod tests {
 
         test_expand!(target.clone(), args => formatted1);
     }
+
+    #[test]
+    fn test_expand_trait_split_transfers_only_async(){
+        let target: ItemTrait = parse_quote! {
+            trait Foo {
+                async fn foo() -> u8;
+                fn bar() -> u16;
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait
+        };
+
+        test_expand!(target.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait;
+        };
+
+        let formatted2 = format_expand(target.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_trait_split_with_option_copy_sync_transfers_async_and_copies_sync(){
+        let target: ItemTrait = parse_quote! {
+            trait Foo {
+                async fn foo() -> u8;
+                fn bar() -> u16;
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait(copy_sync)
+        };
+
+        test_expand!(target.clone(), args => formatted1);
+
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait(copy_sync);
+        };
+
+        let formatted2 = format_expand(target.clone(), args);
+
+        assert_str_eq!(formatted1, formatted2);
+    }
 }
