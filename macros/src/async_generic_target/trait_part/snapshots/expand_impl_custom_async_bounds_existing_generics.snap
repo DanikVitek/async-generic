@@ -1,0 +1,10 @@
+---
+source: macros/src/async_generic_target/trait_part/mod.rs
+expression: formatted1
+---
+impl<B> Foo<B> for A {}
+impl<B, T> FooAsync<B> for A
+where
+    Self: Sync,
+    T: Sync,
+{}

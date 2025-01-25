@@ -34,7 +34,7 @@ impl TraitPart for ItemTrait {
     }
 
     fn set_generics(&mut self, generics: Generics) {
-        self.generics = generics;
+        self.generics.where_clause = generics.where_clause;
     }
 }
 

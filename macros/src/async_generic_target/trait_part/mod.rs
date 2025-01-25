@@ -206,7 +206,7 @@ impl Parse for AsyncTrait {
         let mut generics: Generics = input.parse()?;
 
         let supertraits = if input.peek(Token![:]) {
-            Some((input.parse()?, Punctuated::parse_terminated(input)?))
+            Some((input.parse()?, Punctuated::parse_separated_nonempty(input)?))
         } else {
             None
         };
@@ -762,5 +762,65 @@ mod tests {
         let formatted2 = format_expand(target, args);
 
         assert_str_eq!(formatted1, formatted2);
+    }
+
+    #[test]
+    fn test_expand_trait_custom_async_bounds() {
+        let target: ItemTrait = parse_quote! {
+            trait Foo {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait<T>: Send
+            where
+                Self: Sync,
+                T: Sync;
+        };
+
+        test_expand!(target.clone(), args => formatted1);
+    }
+
+    #[test]
+    fn test_expand_trait_custom_async_bounds_existing_generics() {
+        let target: ItemTrait = parse_quote! {
+            trait Foo<B> {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait<B, T>: Send
+            where
+                Self: Sync,
+                T: Sync;
+        };
+
+        test_expand!(target.clone(), args => formatted1);
+    }
+
+    #[test]
+    fn test_expand_impl_custom_async_bounds() {
+        let target: ItemImpl = parse_quote! {
+            impl Foo for A {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait<T>: Send
+            where
+                Self: Sync,
+                T: Sync;
+        };
+
+        test_expand!(target.clone(), args => formatted1);
+    }
+
+    #[test]
+    fn test_expand_impl_custom_async_bounds_existing_generics() {
+        let target: ItemImpl = parse_quote! {
+            impl<B> Foo<B> for A {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait<B, T>: Send
+            where
+                Self: Sync,
+                T: Sync;
+        };
+
+        test_expand!(target.clone(), args => formatted1);
     }
 }
