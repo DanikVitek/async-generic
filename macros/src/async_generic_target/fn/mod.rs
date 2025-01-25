@@ -1246,4 +1246,40 @@ mod tests {
 
         test_expand!(target_fn, args);
     }
+
+    #[test]
+    fn test_expand_async_condition_affects_inner_items() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {
+                fn bar() {
+                    if _async {
+                        0
+                    } else {
+                        1
+                    }
+                }
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {};
+
+        test_expand!(target_fn, args);
+    }
+
+    #[test]
+    fn test_expand_sync_condition_affects_inner_items() {
+        let target_fn: ItemFn = parse_quote! {
+            fn foo() {
+                fn bar() {
+                    if _sync {
+                        0
+                    } else {
+                        1
+                    }
+                }
+            }
+        };
+        let args: AsyncGenericArgs = parse_quote! {};
+
+        test_expand!(target_fn, args);
+    }
 }
