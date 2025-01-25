@@ -1,7 +1,7 @@
 use proc_macro2::Span;
 use syn::{
     bracketed,
-    parse::{discouraged::Speculative, Parse, ParseStream},
+    parse::{discouraged::Speculative, End, Parse, ParseStream},
     AttrStyle, Attribute, Error, Result, Token,
 };
 
@@ -46,6 +46,43 @@ impl Parse for TargetItem {
 
         Ok(target_item)
     }
+}
+
+trait CanSetAttrs {
+    fn set_attrs(&mut self, attrs: Vec<Attribute>);
+}
+
+fn parse_in_order<A, B, Args>(input: ParseStream, attrs: Vec<Attribute>) -> Result<Args>
+where
+    A: Parse + CanSetAttrs,
+    B: Parse + CanSetAttrs,
+    Args: From<A> + From<B> + From<(A, B)>,
+{
+    let mut async_signature: A = input.parse()?;
+    async_signature.set_attrs(attrs);
+
+    let lookahead = input.lookahead1();
+    if !lookahead.peek(Token![;]) {
+        if lookahead.peek(End) {
+            return Ok(Args::from(async_signature));
+        }
+        return Err(lookahead.error());
+    }
+    let _: Token![;] = input.parse()?;
+
+    if input.is_empty() {
+        return Ok(Args::from(async_signature));
+    }
+
+    let sync_signature = input.parse()?;
+
+    let lookahead = input.lookahead1();
+    if !lookahead.peek(Token![;]) && !lookahead.peek(End) {
+        return Err(lookahead.error());
+    }
+    let _: Option<Token![;]> = input.parse()?;
+
+    Ok(Args::from((async_signature, sync_signature)))
 }
 
 pub(self) fn parse_attrs(input: ParseStream) -> Result<Vec<Attribute>> {

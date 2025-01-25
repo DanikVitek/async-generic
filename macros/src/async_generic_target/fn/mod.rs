@@ -4,7 +4,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{
     bracketed, parenthesized,
-    parse::{discouraged::Speculative, End, Parse, ParseStream},
+    parse::{discouraged::Speculative, Parse, ParseStream},
     parse_quote,
     punctuated::Punctuated,
     token::{Brace, Bracket, Paren},
@@ -17,7 +17,7 @@ use syn::{
 };
 
 use self::kind::Kind;
-use super::{parse_attrs, state};
+use super::{parse_attrs, parse_in_order, state, CanSetAttrs};
 
 pub mod kind;
 
@@ -229,19 +229,15 @@ impl Parse for AsyncGenericArgs {
         let attrs = parse_attrs(input)?;
         let lookahead = input.lookahead1();
         if lookahead.peek(kw::sync_signature) {
-            parse_in_order::<SyncSignature, AsyncSignature>(input, attrs)
+            parse_in_order::<SyncSignature, AsyncSignature, _>(input, attrs)
         } else if lookahead.peek(kw::async_signature) {
-            parse_in_order::<AsyncSignature, SyncSignature>(input, attrs)
+            parse_in_order::<AsyncSignature, SyncSignature, _>(input, attrs)
         } else if !input.is_empty() || !attrs.is_empty() {
             Err(lookahead.error())
         } else {
             Ok(Self::default())
         }
     }
-}
-
-trait CanSetAttrs {
-    fn set_attrs(&mut self, attrs: Vec<Attribute>);
 }
 
 impl CanSetAttrs for SyncSignature {
@@ -290,39 +286,6 @@ impl From<(AsyncSignature, SyncSignature)> for AsyncGenericArgs {
             async_signature: Some(async_signature),
         }
     }
-}
-
-fn parse_in_order<A, B>(input: ParseStream, attrs: Vec<Attribute>) -> syn::Result<AsyncGenericArgs>
-where
-    A: Parse + CanSetAttrs,
-    B: Parse + CanSetAttrs,
-    AsyncGenericArgs: From<A> + From<B> + From<(A, B)>,
-{
-    let mut async_signature: A = input.parse()?;
-    async_signature.set_attrs(attrs);
-
-    let lookahead = input.lookahead1();
-    if !lookahead.peek(Token![;]) {
-        if lookahead.peek(End) {
-            return Ok(AsyncGenericArgs::from(async_signature));
-        }
-        return Err(lookahead.error());
-    }
-    let _: Token![;] = input.parse()?;
-
-    if input.is_empty() {
-        return Ok(AsyncGenericArgs::from(async_signature));
-    }
-
-    let sync_signature = input.parse()?;
-
-    let lookahead = input.lookahead1();
-    if !lookahead.peek(Token![;]) && !lookahead.peek(End) {
-        return Err(lookahead.error());
-    }
-    let _: Option<Token![;]> = input.parse()?;
-
-    Ok(AsyncGenericArgs::from((async_signature, sync_signature)))
 }
 
 impl Parse for SyncSignature {
