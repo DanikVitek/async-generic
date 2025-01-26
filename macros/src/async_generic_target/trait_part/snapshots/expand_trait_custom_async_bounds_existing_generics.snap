@@ -3,7 +3,7 @@ source: macros/src/async_generic_target/trait_part/mod.rs
 expression: formatted1
 ---
 trait Foo<B> {}
-trait FooAsync<B>: Send
+trait FooAsync<B, T>: Send
 where
     Self: Sync,
     T: Sync,
