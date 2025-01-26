@@ -1,8 +1,5 @@
 use proc_macro2::Ident;
-use syn::{
-    punctuated::Punctuated, Attribute, Generics, ImplItem, ImplItemFn, ItemImpl, Token,
-    TypeParamBound,
-};
+use syn::{Attribute, Generics, ImplItem, ImplItemFn, ItemImpl, PathArguments};
 
 use super::{HasAsyncness, HasAttributes, TraitPart, TraitPartItem};
 
@@ -35,16 +32,14 @@ impl TraitPart for ItemImpl {
         self.attrs.extend(iter);
     }
 
-    fn set_colon_token(&mut self, _: Token![:]) {
-        // N/A
-    }
-
-    fn set_supertraits(&mut self, _: Punctuated<TypeParamBound, Token![+]>) {
-        // N/A
-    }
-
     fn set_generics(&mut self, generics: Generics) {
         self.generics = generics;
+    }
+
+    fn set_path_args(&mut self, path_args: PathArguments) {
+        if let Some((_, path, _)) = &mut self.trait_ {
+            path.segments.last_mut().unwrap().arguments = path_args;
+        }
     }
 }
 

@@ -25,16 +25,16 @@ impl TraitPart for ItemTrait {
         self.attrs.extend(iter);
     }
 
-    fn set_colon_token(&mut self, colon_token: Token![:]) {
-        self.colon_token = Some(colon_token);
-    }
-
-    fn set_supertraits(&mut self, supertraits: Punctuated<TypeParamBound, Token![+]>) {
-        self.supertraits = supertraits;
-    }
-
     fn set_generics(&mut self, generics: Generics) {
         self.generics = generics;
+    }
+
+    fn set_supertraits(
+        &mut self,
+        (colon_token, supertraits): (Token![:], Punctuated<TypeParamBound, Token![+]>),
+    ) {
+        self.colon_token = Some(colon_token);
+        self.supertraits = supertraits;
     }
 }
 

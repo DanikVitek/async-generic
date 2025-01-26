@@ -9,11 +9,15 @@ use syn::{
     punctuated::Punctuated,
     spanned::Spanned,
     token::Paren,
-    AttrStyle, Attribute, Error, Generics, ItemImpl, ItemTrait, Meta, MetaList, Path, Token,
-    TypeParamBound,
+    AttrStyle, Attribute, Error, Generics, ItemImpl, ItemTrait, Meta, MetaList, Path,
+    PathArguments, Token, TypeParamBound,
 };
 
-use super::{parse_attrs, parse_in_order, r#fn, r#fn::{AsyncGenericFn, TargetItemFn}, state, CanSetAttrs};
+use super::{
+    parse_attrs, parse_in_order, r#fn,
+    r#fn::{AsyncGenericFn, TargetItemFn},
+    state, CanSetAttrs,
+};
 use crate::util::LetExt;
 
 pub mod r#impl;
@@ -105,6 +109,7 @@ pub struct AsyncTrait {
     attrs: Vec<Attribute>,
     options: Option<Options>,
     generics: Generics,
+    path_args: PathArguments,
     supertraits: Option<(Token![:], Punctuated<TypeParamBound, Token![+]>)>,
 }
 
@@ -205,6 +210,14 @@ impl Parse for AsyncTrait {
 
         let mut generics: Generics = input.parse()?;
 
+        let path_args = if input.peek(Token![<]) {
+            PathArguments::AngleBracketed(input.parse()?)
+        } else if input.peek(Paren) {
+            PathArguments::Parenthesized(input.parse()?)
+        } else {
+            PathArguments::None
+        };
+
         let supertraits = if input.peek(Token![:]) {
             Some((input.parse()?, Punctuated::parse_separated_nonempty(input)?))
         } else {
@@ -216,6 +229,7 @@ impl Parse for AsyncTrait {
             attrs,
             options,
             generics,
+            path_args,
             supertraits,
         })
     }
@@ -303,9 +317,16 @@ pub trait TraitPart: Clone + ToTokens {
 
     fn extend_attrs(&mut self, iter: impl IntoIterator<Item = Attribute>);
 
-    fn set_colon_token(&mut self, colon_token: Token![:]);
-    fn set_supertraits(&mut self, supertraits: Punctuated<TypeParamBound, Token![+]>);
     fn set_generics(&mut self, generics: Generics);
+    
+    fn set_path_args(&mut self, path_args: PathArguments) {
+        let _ = path_args;
+    }
+    
+    fn set_supertraits(&mut self, (colon_token, supertraits): (Token![:], Punctuated<TypeParamBound, Token![+]>)) {
+        let _ = colon_token;
+        let _ = supertraits;
+    }
 }
 
 pub trait TraitPartItem {
@@ -539,14 +560,12 @@ where
 
         self.target
             .extend_attrs(core::mem::take(&mut self.kind.0.attrs));
-        if let Some((colon_token, supertraits)) = self.kind.0.supertraits.take() {
-            self.target.set_colon_token(colon_token);
+        if let Some(supertraits) = self.kind.0.supertraits.take() {
             self.target.set_supertraits(supertraits);
         }
-        self.target
-            .set_generics(core::mem::take(&mut self.kind.0.generics));
-        self.target
-            .update_ident(|ident| Ident::new(&format!("{ident}Async"), ident.span()));
+        self.target.set_generics(core::mem::take(&mut self.kind.0.generics));
+        self.target.set_path_args(core::mem::take(&mut self.kind.0.path_args));
+        self.target.update_ident(|ident| Ident::new(&format!("{ident}Async"), ident.span()));
 
         Ok(AsyncGenericTraitPart {
             target: self.target,
@@ -780,6 +799,18 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_trait_custom_async_bounds_lifetime() {
+        let target: ItemTrait = parse_quote! {
+            trait Foo {}
+        };
+        let args: AsyncGenericArgs = parse_quote! {
+            async_trait<'a>: Sized + Send + 'a
+        };
+
+        test_expand!(target.clone(), args => formatted1);
+    }
+
+    #[test]
     fn test_expand_trait_custom_async_bounds_existing_generics() {
         let target: ItemTrait = parse_quote! {
             trait Foo<B> {}
@@ -815,7 +846,7 @@ mod tests {
             impl<B> Foo<B> for A {}
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait<B, T>: Send
+            async_trait<B, T><B>: Send
             where
                 Self: Sync,
                 T: Sync;
@@ -825,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_trait_split_transfers_only_async(){
+    fn test_expand_trait_split_transfers_only_async() {
         let target: ItemTrait = parse_quote! {
             trait Foo {
                 async fn foo() -> u8;
@@ -848,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_trait_split_with_option_copy_sync_transfers_async_and_copies_sync(){
+    fn test_expand_trait_split_with_option_copy_sync_transfers_async_and_copies_sync() {
         let target: ItemTrait = parse_quote! {
             trait Foo {
                 async fn foo() -> u8;
