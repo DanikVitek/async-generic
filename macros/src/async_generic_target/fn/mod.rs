@@ -736,14 +736,26 @@ where
     ) {
         *node = if A::cmp(predicate) {
             Expr::Block(ExprBlock {
-                attrs: vec![],
+                attrs: parse_quote!{
+                    #[allow(unused_braces)]
+                    #[allow(clippy::blocks_in_conditions)]
+                },
                 label: None,
                 block: then_branch,
             })
         } else if let Some(else_expr) = else_branch {
-            else_expr
+            match else_expr {
+                Expr::Block(block) => Expr::Block(ExprBlock{
+                    attrs: parse_quote!{
+                        #[allow(unused_braces)]
+                        #[allow(clippy::blocks_in_conditions)]
+                    },
+                    ..block
+                }),
+                _ => else_expr,
+            }
         } else {
-            parse_quote! {{}}
+            parse_quote! {()}
         }
     }
 }
@@ -1268,7 +1280,7 @@ mod tests {
 
         assert_str_eq!(formatted1, formatted2);
     }
-    
+
     #[test]
     fn test_expand_async_interface_kind_pin_box_ready() {
         let target_fn: ItemFn = parse_quote! {

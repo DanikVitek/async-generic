@@ -3,8 +3,8 @@ source: macros/src/async_generic_target/fn/mod.rs
 expression: formatted
 ---
 fn foo() {
-    { 1 }
+    #[allow(unused_braces)] #[allow(clippy::blocks_in_conditions)] { 1 }
 }
 async fn foo_async() {
-    { 0 }
+    #[allow(unused_braces)] #[allow(clippy::blocks_in_conditions)] { 0 }
 }

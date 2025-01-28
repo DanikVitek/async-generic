@@ -27,15 +27,15 @@ pub mod r#trait;
 pub mod kw {
     use syn::custom_keyword;
 
-    custom_keyword!(async_trait);
-    custom_keyword!(sync_trait);
+    custom_keyword!(async_variant);
+    custom_keyword!(sync_variant);
     custom_keyword!(copy_sync);
 }
 
 const ERROR_PARSE_ARGS: &str =
-    "`async_generic` on `trait` or `impl` can only take an `sync_trait` or `async_trait` argument";
+    "`async_generic` on `trait` or `impl` can only take an `sync_variant` or `async_variant` argument";
 const ERROR_UNATTAINED_ATTRIBUTES: &str =
-    "attributes must be placed on `sync_trait` and/or `async_trait`";
+    "attributes must be placed on `sync_variant` and/or `async_variant`";
 
 #[inline]
 pub fn expand(target: impl Into<TargetTraitPart>, args: AsyncGenericArgs) -> TokenStream2 {
@@ -43,29 +43,29 @@ pub fn expand(target: impl Into<TargetTraitPart>, args: AsyncGenericArgs) -> Tok
         fn expand<T: TraitPart>(
             target: T,
             AsyncGenericArgs {
-                sync_trait,
-                async_trait,
+                sync_variant,
+                async_variant,
             }: AsyncGenericArgs,
         ) -> TokenStream2 {
-            match async_trait {
-                None => AsyncGenericTraitPart::new(target, kind::Sync::<true>(sync_trait))
+            match async_variant {
+                None => AsyncGenericTraitPart::new(target, kind::Sync::<true>(sync_variant))
                     .rewrite()
                     .map(|res| res.into_token_stream())
                     .unwrap_or_else(|err| err.into_compile_error()),
-                Some(async_trait) => {
-                    let sync_trait =
-                        AsyncGenericTraitPart::new(target.clone(), kind::Sync::<false>(sync_trait))
+                Some(async_variant) => {
+                    let sync_variant =
+                        AsyncGenericTraitPart::new(target.clone(), kind::Sync::<false>(sync_variant))
                             .rewrite()
                             .map(|res| res.into_token_stream())
                             .unwrap_or_else(|err| err.into_compile_error());
 
-                    let async_trait = AsyncGenericTraitPart::new(target, kind::Async(async_trait))
+                    let async_variant = AsyncGenericTraitPart::new(target, kind::Async(async_variant))
                         .rewrite()
                         .map(|res| res.into_token_stream())
                         .unwrap_or_else(|err| err.into_compile_error());
 
                     let mut tt = TokenStream2::new();
-                    tt.extend([sync_trait, async_trait]);
+                    tt.extend([sync_variant, async_variant]);
                     tt
                 }
             }
@@ -97,8 +97,8 @@ impl From<ItemImpl> for TargetTraitPart {
 
 #[derive(Default)]
 pub struct AsyncGenericArgs {
-    sync_trait: Option<SyncTrait>,
-    async_trait: Option<AsyncTrait>,
+    sync_variant: Option<SyncTrait>,
+    async_variant: Option<AsyncTrait>,
 }
 
 pub struct SyncTrait {
@@ -123,10 +123,10 @@ impl Parse for AsyncGenericArgs {
         let fork1 = input.fork();
         let attrs = parse_attrs(input)?;
         let lookahead = input.lookahead1();
-        if lookahead.peek(kw::sync_trait) {
-            parse_in_order::<SyncTrait, AsyncTrait, _>(input, attrs)
-        } else if lookahead.peek(kw::async_trait) {
+        if lookahead.peek(kw::async_variant) {
             parse_in_order::<AsyncTrait, SyncTrait, _>(input, attrs)
+        } else if lookahead.peek(kw::sync_variant) {
+            parse_in_order::<SyncTrait, AsyncTrait, _>(input, attrs)
         } else if !lookahead.peek(End) || !attrs.is_empty() {
             let mut err = lookahead.error();
             err.extend(fork1.error(ERROR_UNATTAINED_ATTRIBUTES));
@@ -150,37 +150,37 @@ impl CanSetAttrs for AsyncTrait {
 }
 
 impl From<SyncTrait> for AsyncGenericArgs {
-    fn from(sync_trait: SyncTrait) -> Self {
+    fn from(sync_variant: SyncTrait) -> Self {
         Self {
-            sync_trait: Some(sync_trait),
-            async_trait: None,
+            sync_variant: Some(sync_variant),
+            async_variant: None,
         }
     }
 }
 
 impl From<AsyncTrait> for AsyncGenericArgs {
-    fn from(async_trait: AsyncTrait) -> Self {
+    fn from(async_variant: AsyncTrait) -> Self {
         Self {
-            sync_trait: None,
-            async_trait: Some(async_trait),
+            sync_variant: None,
+            async_variant: Some(async_variant),
         }
     }
 }
 
 impl From<(SyncTrait, AsyncTrait)> for AsyncGenericArgs {
-    fn from((sync_trait, async_trait): (SyncTrait, AsyncTrait)) -> Self {
+    fn from((sync_variant, async_variant): (SyncTrait, AsyncTrait)) -> Self {
         Self {
-            sync_trait: Some(sync_trait),
-            async_trait: Some(async_trait),
+            sync_variant: Some(sync_variant),
+            async_variant: Some(async_variant),
         }
     }
 }
 
 impl From<(AsyncTrait, SyncTrait)> for AsyncGenericArgs {
-    fn from((async_trait, sync_trait): (AsyncTrait, SyncTrait)) -> Self {
+    fn from((async_variant, sync_variant): (AsyncTrait, SyncTrait)) -> Self {
         Self {
-            sync_trait: Some(sync_trait),
-            async_trait: Some(async_trait),
+            sync_variant: Some(sync_variant),
+            async_variant: Some(async_variant),
         }
     }
 }
@@ -188,7 +188,7 @@ impl From<(AsyncTrait, SyncTrait)> for AsyncGenericArgs {
 impl Parse for SyncTrait {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = parse_attrs(input)?;
-        let _: kw::sync_trait = input
+        let _: kw::sync_variant = input
             .parse()
             .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
         Ok(Self { attrs })
@@ -198,7 +198,7 @@ impl Parse for SyncTrait {
 impl Parse for AsyncTrait {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = parse_attrs(input)?;
-        let _: kw::async_trait = input
+        let _: kw::async_variant = input
             .parse()
             .map_err(|err| Error::new(err.span(), ERROR_PARSE_ARGS))?;
 
@@ -318,11 +318,11 @@ pub trait TraitPart: Clone + ToTokens {
     fn extend_attrs(&mut self, iter: impl IntoIterator<Item = Attribute>);
 
     fn set_generics(&mut self, generics: Generics);
-    
+
     fn set_path_args(&mut self, path_args: PathArguments) {
-        let _ = path_args;
+        _ = path_args;
     }
-    
+
     fn set_supertraits(&mut self, (colon_token, supertraits): (Token![:], Punctuated<TypeParamBound, Token![+]>)) {
         let _ = colon_token;
         let _ = supertraits;
@@ -425,7 +425,7 @@ where
                 .0
                 .take()
                 .into_iter()
-                .flat_map(|sync_trait| sync_trait.attrs),
+                .flat_map(|sync_variant| sync_variant.attrs),
         );
 
         Ok(AsyncGenericTraitPart {
@@ -492,7 +492,7 @@ where
                 .0
                 .take()
                 .into_iter()
-                .flat_map(|sync_trait| sync_trait.attrs),
+                .flat_map(|sync_variant| sync_variant.attrs),
         );
 
         Ok(AsyncGenericTraitPart {
@@ -639,7 +639,7 @@ mod tests {
         test_expand!(target.clone(), args => formatted1);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_trait
+            sync_variant
         };
 
         let formatted2 = format_expand(target.clone(), args);
@@ -647,7 +647,7 @@ mod tests {
         assert_str_eq!(formatted1, formatted2);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_trait;
+            sync_variant;
         };
 
         let formatted2 = format_expand(target, args);
@@ -665,7 +665,7 @@ mod tests {
         test_expand!(target.clone(), args => formatted1);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_trait
+            sync_variant
         };
 
         let formatted2 = format_expand(target.clone(), args);
@@ -673,7 +673,7 @@ mod tests {
         assert_str_eq!(formatted1, formatted2);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_trait;
+            sync_variant;
         };
 
         let formatted2 = format_expand(target, args);
@@ -696,7 +696,7 @@ mod tests {
         test_expand!(target.clone(), args => formatted1);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_trait
+            sync_variant
         };
 
         let formatted2 = format_expand(target.clone(), args);
@@ -704,7 +704,7 @@ mod tests {
         assert_str_eq!(formatted1, formatted2);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_trait;
+            sync_variant;
         };
 
         let formatted2 = format_expand(target, args);
@@ -727,7 +727,7 @@ mod tests {
         test_expand!(target.clone(), args => formatted1);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_trait
+            sync_variant
         };
 
         let formatted2 = format_expand(target.clone(), args);
@@ -735,7 +735,7 @@ mod tests {
         assert_str_eq!(formatted1, formatted2);
 
         let args: AsyncGenericArgs = parse_quote! {
-            sync_trait;
+            sync_variant;
         };
 
         let formatted2 = format_expand(target, args);
@@ -749,13 +749,13 @@ mod tests {
             trait Foo {}
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait
+            async_variant
         };
 
         test_expand!(target.clone(), args => formatted1);
 
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait;
+            async_variant;
         };
 
         let formatted2 = format_expand(target, args);
@@ -769,13 +769,13 @@ mod tests {
             impl Foo for A {}
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait
+            async_variant
         };
 
         test_expand!(target.clone(), args => formatted1);
 
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait;
+            async_variant;
         };
 
         let formatted2 = format_expand(target, args);
@@ -789,7 +789,7 @@ mod tests {
             trait Foo {}
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait<T>: Send
+            async_variant<T>: Send
             where
                 Self: Sync,
                 T: Sync;
@@ -804,7 +804,7 @@ mod tests {
             trait Foo {}
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait<'a>: Sized + Send + 'a
+            async_variant<'a>: Sized + Send + 'a
         };
 
         test_expand!(target.clone(), args => formatted1);
@@ -816,7 +816,7 @@ mod tests {
             trait Foo<B> {}
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait<B, T>: Send
+            async_variant<B, T>: Send
             where
                 Self: Sync,
                 T: Sync;
@@ -831,7 +831,7 @@ mod tests {
             impl Foo for A {}
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait<T>: Send
+            async_variant<T>: Send
             where
                 Self: Sync,
                 T: Sync;
@@ -846,7 +846,7 @@ mod tests {
             impl<B> Foo<B> for A {}
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait<B, T><B>: Send
+            async_variant<B, T><B>: Send
             where
                 Self: Sync,
                 T: Sync;
@@ -864,13 +864,13 @@ mod tests {
             }
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait
+            async_variant
         };
 
         test_expand!(target.clone(), args => formatted1);
 
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait;
+            async_variant;
         };
 
         let formatted2 = format_expand(target.clone(), args);
@@ -887,13 +887,13 @@ mod tests {
             }
         };
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait(copy_sync)
+            async_variant(copy_sync)
         };
 
         test_expand!(target.clone(), args => formatted1);
 
         let args: AsyncGenericArgs = parse_quote! {
-            async_trait(copy_sync);
+            async_variant(copy_sync);
         };
 
         let formatted2 = format_expand(target.clone(), args);

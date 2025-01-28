@@ -4,11 +4,11 @@ expression: formatted
 ---
 fn foo() {
     fn bar() {
-        { 0 }
+        #[allow(unused_braces)] #[allow(clippy::blocks_in_conditions)] { 0 }
     }
 }
 async fn foo_async() {
     fn bar() {
-        { 1 }
+        #[allow(unused_braces)] #[allow(clippy::blocks_in_conditions)] { 1 }
     }
 }

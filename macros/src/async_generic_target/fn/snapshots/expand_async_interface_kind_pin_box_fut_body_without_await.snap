@@ -3,12 +3,14 @@ source: macros/src/async_generic_target/fn/mod.rs
 expression: formatted
 ---
 fn foo() {
+    #[allow(unused_braces)] #[allow(clippy::blocks_in_conditions)]
     {
         1;
     }
 }
 fn foo_async() {
     Box::pin({
+        #[allow(unused_braces)] #[allow(clippy::blocks_in_conditions)]
         {
             0;
         }
