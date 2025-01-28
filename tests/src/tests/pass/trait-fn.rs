@@ -5,7 +5,7 @@ use async_trait::async_trait;
 
 #[async_generic(
     #[async_trait]
-    sync_trait
+    sync_variant
 )]
 trait NoDefaultImpl {
     #[async_generic(async_signature(&self) -> String where Self: Send + Sync)]
@@ -16,7 +16,7 @@ struct StructA;
 
 #[async_generic(
     #[async_trait]
-    sync_trait
+    sync_variant
 )]
 impl NoDefaultImpl for StructA {
     #[async_generic(async_signature(&self) -> String where Self: Send + Sync)]
@@ -37,7 +37,7 @@ impl StructA {
 
 #[async_generic(
     #[async_trait]
-    sync_trait
+    sync_variant
 )]
 trait DefaultImpl {
     #[async_generic(async_signature(&self) -> String where Self: Send + Sync)]
@@ -64,7 +64,7 @@ impl DefaultImpl for StructB {}
 
 #[async_generic(
     #[async_trait]
-    sync_trait
+    sync_variant
 )]
 trait DefaultImplGenericParam {
     #[async_generic(

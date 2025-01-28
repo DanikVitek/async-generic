@@ -5,7 +5,7 @@ use async_generic::async_generic;
 
 #[async_generic(
     #[async_trait]
-    async_trait
+    async_variant
 )]
 trait Read {
     #[async_generic(
@@ -24,7 +24,7 @@ trait Read {
 
 #[async_generic(
     #[async_trait]
-    async_trait(copy_sync)
+    async_variant(copy_sync)
 )]
 trait Serialize {
     #[async_generic(
@@ -48,7 +48,7 @@ trait AsyncWrite: Unpin + Send {
 
 #[async_generic(
     #[async_trait]
-    async_trait(copy_sync)
+    async_variant(copy_sync)
 )]
 impl Serialize for u8 {
     #[async_generic(

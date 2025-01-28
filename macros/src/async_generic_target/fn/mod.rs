@@ -688,7 +688,7 @@ trait CanRewriteBlock {
         node: &mut Expr,
         predicate: AsyncPredicate,
         then_branch: Block,
-        else_branch: Option<Expr>,
+        else_branch: Option<Block>,
     );
 }
 
@@ -732,28 +732,35 @@ where
         node: &mut Expr,
         predicate: AsyncPredicate,
         then_branch: Block,
-        else_branch: Option<Expr>,
+        else_branch: Option<Block>,
     ) {
-        *node = if A::cmp(predicate) {
+        fn rewrite_branch(mut branch: Block) -> Expr {
             Expr::Block(ExprBlock {
-                attrs: parse_quote!{
-                    #[allow(unused_braces)]
-                    #[allow(clippy::blocks_in_conditions)]
-                },
+                attrs: vec![],
                 label: None,
-                block: then_branch,
+                block: if branch.stmts.len() == 1 {
+                    let stmt = branch.stmts.pop().unwrap();
+                    match stmt {
+                        // used in case the expression uses RAII
+                        Stmt::Expr(expr, None) => parse_quote! {{
+                            let __value = #expr;
+                            __value
+                        }},
+                        _ => {
+                            branch.stmts.push(stmt);
+                            branch
+                        }
+                    }
+                } else {
+                    branch
+                },
             })
-        } else if let Some(else_expr) = else_branch {
-            match else_expr {
-                Expr::Block(block) => Expr::Block(ExprBlock{
-                    attrs: parse_quote!{
-                        #[allow(unused_braces)]
-                        #[allow(clippy::blocks_in_conditions)]
-                    },
-                    ..block
-                }),
-                _ => else_expr,
-            }
+        }
+
+        *node = if A::cmp(predicate) {
+            rewrite_branch(then_branch)
+        } else if let Some(else_branch) = else_branch {
+            rewrite_branch(else_branch)
         } else {
             parse_quote! {()}
         }
@@ -788,16 +795,23 @@ where
             return;
         };
         let then_branch = expr_if.then_branch.clone();
-        let else_branch = expr_if.else_branch.as_mut().map(|(_, eb)| {
-            core::mem::replace(
-                &mut **eb,
-                Expr::Tuple(ExprTuple {
-                    attrs: vec![],
-                    paren_token: Default::default(),
-                    elems: Default::default(),
-                }),
-            )
-        });
+        let else_branch = match expr_if.else_branch.as_mut() {
+            None => None,
+            Some((_, else_branch)) if matches!(&**else_branch, Expr::Block(_)) => {
+                let Expr::Block(ExprBlock { block, .. }) = core::mem::replace(
+                    &mut **else_branch,
+                    Expr::Tuple(ExprTuple {
+                        attrs: vec![],
+                        paren_token: Default::default(),
+                        elems: Default::default(),
+                    }),
+                ) else {
+                    unreachable!();
+                };
+                Some(block)
+            }
+            Some(_) => return,
+        };
 
         self.rewrite_block(node, predicate, then_branch, else_branch);
     }

@@ -1,4 +1,4 @@
-error: unexpected end of input, expected `sync_trait` or `async_trait`
+error: unexpected end of input, expected `async_variant` or `sync_variant`
  --> src/tests/fail/unattained-attributes-trait.rs:4:1
   |
 4 | / #[async_generic(
@@ -8,7 +8,7 @@ error: unexpected end of input, expected `sync_trait` or `async_trait`
   |
   = note: this error originates in the attribute macro `async_generic` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: attributes must be placed on `sync_trait` and/or `async_trait`
+error: attributes must be placed on `sync_variant` and/or `async_variant`
  --> src/tests/fail/unattained-attributes-trait.rs:5:5
   |
 5 |     #[async_trait]

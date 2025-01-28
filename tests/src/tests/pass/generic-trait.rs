@@ -3,7 +3,7 @@ use async_generic::async_generic;
 
 #[async_generic(
     #[async_trait]
-    async_trait: Send
+    async_variant: Send
 )]
 trait Deserialize {
     #[async_generic]
@@ -18,7 +18,7 @@ struct Foo;
 
 #[async_generic(
     #[async_trait]
-    async_trait
+    async_variant
 )]
 impl Deserialize for Foo {
     #[async_generic]
