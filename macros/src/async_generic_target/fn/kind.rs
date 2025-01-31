@@ -56,8 +56,8 @@ impl Kind for Sync {
 }
 
 impl<const PRESERVE_IDENT: bool> Kind for Async<PRESERVE_IDENT> {
-    fn transform_constness(_constness: Option<Token!(const)>) -> Option<Token!(const)> {
-        None // TODO: retutn `constness` when `const async fn` is stabilized
+    fn transform_constness(_constness: Option<Token![const]>) -> Option<Token![const]> {
+        None // TODO: return `constness` when `const async fn` is stabilized
     }
 
     fn asyncness(&self) -> Option<Token![async]> {
@@ -100,8 +100,8 @@ impl<const PRESERVE_IDENT: bool> Kind for Async<PRESERVE_IDENT> {
 
     fn transform_inputs(
         &mut self,
-        inputs: Punctuated<FnArg, Token!(,)>,
-    ) -> Punctuated<FnArg, Token!(,)> {
+        inputs: Punctuated<FnArg, Token![,]>,
+    ) -> Punctuated<FnArg, Token![,]> {
         if let Some(alt_inputs) = self.0.as_mut().and_then(|sig| {
             sig.params
                 .as_mut()
