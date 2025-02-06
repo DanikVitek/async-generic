@@ -4,10 +4,7 @@
 use proc_macro::TokenStream;
 use syn::parse_macro_input;
 
-use crate::async_generic_target::{
-    r#fn,
-    trait_part, TargetItem,
-};
+use crate::async_generic_target::{r#fn, trait_part, TargetItem};
 
 mod async_generic_target;
 mod util;

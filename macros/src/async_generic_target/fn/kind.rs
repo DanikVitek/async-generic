@@ -32,10 +32,7 @@ pub trait Kind {
         inputs
     }
 
-    fn transform_variadic(
-        &mut self,
-        variadic: Option<Variadic>,
-    ) -> Option<Variadic> {
+    fn transform_variadic(&mut self, variadic: Option<Variadic>) -> Option<Variadic> {
         variadic
     }
 
@@ -113,15 +110,12 @@ impl<const PRESERVE_IDENT: bool> Kind for Async<PRESERVE_IDENT> {
         }
     }
 
-    fn transform_variadic(
-        &mut self,
-        variadic: Option<Variadic>,
-    ) -> Option<Variadic> {
-        if let Some(alt_variadic) = self.0.as_mut().and_then(|sig| {
-            sig.params
-                .as_mut()
-                .map(|params| params.variadic.take())
-        }) {
+    fn transform_variadic(&mut self, variadic: Option<Variadic>) -> Option<Variadic> {
+        if let Some(alt_variadic) = self
+            .0
+            .as_mut()
+            .and_then(|sig| sig.params.as_mut().map(|params| params.variadic.take()))
+        {
             alt_variadic
         } else {
             variadic

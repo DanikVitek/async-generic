@@ -16,4 +16,5 @@ macro_rules! test_expand {
     };
 }
 
-pub(crate) use {local_assert_snapshot, test_expand};
+pub(crate) use local_assert_snapshot;
+pub(crate) use test_expand;

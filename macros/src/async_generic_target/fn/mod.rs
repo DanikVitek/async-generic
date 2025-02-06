@@ -598,7 +598,7 @@ impl<const PRESERVE_IDENT: bool> CanSurround for kind::Async<PRESERVE_IDENT> {
                 }
 
                 fn visit_item(&mut self, _: &'ast Item) {
-                    return;
+                    // Do not recurse into items
                 }
             }
 
@@ -701,7 +701,7 @@ struct IfAsyncRewriter<A>(PhantomData<A>);
 
 impl<A> Clone for IfAsyncRewriter<A> {
     fn clone(&self) -> Self {
-        Self(self.0)
+        *self
     }
 }
 
@@ -780,7 +780,7 @@ where
         let Expr::Path(cond) = expr_if.cond.as_ref() else {
             return;
         };
-        if !cond.attrs.is_empty() || !cond.qself.is_none() {
+        if !cond.attrs.is_empty() || cond.qself.is_some() {
             return;
         }
         let Some(ident) = cond.path.get_ident() else {

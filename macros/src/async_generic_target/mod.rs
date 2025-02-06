@@ -85,7 +85,7 @@ where
     Ok(Args::from((async_signature, sync_signature)))
 }
 
-pub(self) fn parse_attrs(input: ParseStream) -> Result<Vec<Attribute>> {
+fn parse_attrs(input: ParseStream) -> Result<Vec<Attribute>> {
     let mut attrs = Vec::new();
     while input.peek(Token![#]) {
         let content;

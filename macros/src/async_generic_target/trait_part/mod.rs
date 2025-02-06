@@ -13,11 +13,7 @@ use syn::{
     PathArguments, Token, TypeParamBound,
 };
 
-use super::{
-    parse_attrs, parse_in_order, r#fn,
-    r#fn::{AsyncGenericFn, TargetItemFn},
-    state, CanSetAttrs,
-};
+use super::{parse_attrs, parse_in_order, r#fn, r#fn::TargetItemFn, state, CanSetAttrs};
 use crate::util::LetExt;
 
 pub mod r#impl;
@@ -53,16 +49,19 @@ pub fn expand(target: impl Into<TargetTraitPart>, args: AsyncGenericArgs) -> Tok
                     .map(|res| res.into_token_stream())
                     .unwrap_or_else(|err| err.into_compile_error()),
                 Some(async_variant) => {
-                    let sync_variant =
-                        AsyncGenericTraitPart::new(target.clone(), kind::Sync::<false>(sync_variant))
+                    let sync_variant = AsyncGenericTraitPart::new(
+                        target.clone(),
+                        kind::Sync::<false>(sync_variant),
+                    )
+                    .rewrite()
+                    .map(|res| res.into_token_stream())
+                    .unwrap_or_else(|err| err.into_compile_error());
+
+                    let async_variant =
+                        AsyncGenericTraitPart::new(target, kind::Async(async_variant))
                             .rewrite()
                             .map(|res| res.into_token_stream())
                             .unwrap_or_else(|err| err.into_compile_error());
-
-                    let async_variant = AsyncGenericTraitPart::new(target, kind::Async(async_variant))
-                        .rewrite()
-                        .map(|res| res.into_token_stream())
-                        .unwrap_or_else(|err| err.into_compile_error());
 
                     let mut tt = TokenStream2::new();
                     tt.extend([sync_variant, async_variant]);
@@ -250,15 +249,15 @@ impl Parse for Options {
                 "expected at most one option, found multiple",
             ));
         }
-        let copy_sync;
-        if idents.iter().any(|ident| **ident == "copy_sync") {
-            copy_sync = true;
+
+        let copy_sync = if idents.iter().any(|ident| **ident == "copy_sync") {
+            true
         } else {
             return Err(Error::new(
                 idents[0].span(),
                 "expected `copy_sync` as the only option",
             ));
-        }
+        };
         Ok(Self { copy_sync })
     }
 }
@@ -323,7 +322,10 @@ pub trait TraitPart: Clone + ToTokens {
         _ = path_args;
     }
 
-    fn set_supertraits(&mut self, (colon_token, supertraits): (Token![:], Punctuated<TypeParamBound, Token![+]>)) {
+    fn set_supertraits(
+        &mut self,
+        (colon_token, supertraits): (Token![:], Punctuated<TypeParamBound, Token![+]>),
+    ) {
         let _ = colon_token;
         let _ = supertraits;
     }
@@ -399,10 +401,10 @@ where
                                     }
                                 };
                             let (
-                                AsyncGenericFn {
+                                r#fn::AsyncGenericFn {
                                     target: sync_fn, ..
                                 },
-                                AsyncGenericFn {
+                                r#fn::AsyncGenericFn {
                                     target: async_fn, ..
                                 },
                             ) = super::r#fn::split::<false>(
@@ -470,9 +472,9 @@ where
                                         return Ok(acc);
                                     }
                                 };
-                            let AsyncGenericFn {
+                            let r#fn::AsyncGenericFn {
                                 target: sync_fn, ..
-                            } = AsyncGenericFn::<r#fn::kind::Sync, state::Initial>::new(
+                            } = r#fn::AsyncGenericFn::<r#fn::kind::Sync, state::Initial>::new(
                                 trait_item_fn.into(),
                                 async_generic_args.sync_signature,
                             )
@@ -540,9 +542,9 @@ where
                                     }
                                 };
 
-                            let AsyncGenericFn {
+                            let r#fn::AsyncGenericFn {
                                 target: async_fn, ..
-                            } = AsyncGenericFn::<r#fn::kind::Async<true>, state::Initial>::new(
+                            } = r#fn::AsyncGenericFn::<r#fn::kind::Async<true>, state::Initial>::new(
                                 trait_item_fn.into(),
                                 async_generic_args.async_signature,
                             )
@@ -563,9 +565,12 @@ where
         if let Some(supertraits) = self.kind.0.supertraits.take() {
             self.target.set_supertraits(supertraits);
         }
-        self.target.set_generics(core::mem::take(&mut self.kind.0.generics));
-        self.target.set_path_args(core::mem::take(&mut self.kind.0.path_args));
-        self.target.update_ident(|ident| Ident::new(&format!("{ident}Async"), ident.span()));
+        self.target
+            .set_generics(core::mem::take(&mut self.kind.0.generics));
+        self.target
+            .set_path_args(core::mem::take(&mut self.kind.0.path_args));
+        self.target
+            .update_ident(|ident| Ident::new(&format!("{ident}Async"), ident.span()));
 
         Ok(AsyncGenericTraitPart {
             target: self.target,
@@ -593,7 +598,7 @@ fn take_async_generic_args<T: HasAttributes>(
 ) -> Result<syn::Result<r#fn::AsyncGenericArgs>, ()> {
     match &trait_item_fn.attrs()[i].meta {
         Meta::Path(_) => {
-            trait_item_fn.remove_attr(i).meta;
+            trait_item_fn.remove_attr(i);
             Ok(Ok(r#fn::AsyncGenericArgs::default()))
         }
         Meta::List(_) => {
